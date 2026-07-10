@@ -2,6 +2,7 @@
 // GET /styles, GET /health. Handlers NEVER throw and NEVER leak a stack: every failure returns
 // a JSON error body with an appropriate status.
 
+import { timingSafeEqual } from "node:crypto";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import type { Config } from "./config.js";
@@ -83,6 +84,28 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   return { params };
 }
 
+// Constant-time string compare that never throws and is safe for unequal lengths.
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+// Optional shared-token gate (ADR-0002). Open when auth is disabled (the LAN default). When
+// enabled, requires `Authorization: Bearer <token>` matching config.auth.token. Fails closed if
+// auth is enabled but no token is configured. Callers get a bare 401 — this never reveals whether
+// a token is required, missing, or merely wrong.
+function isAuthorized(req: IncomingMessage, config: Config): boolean {
+  if (!config.auth.enabled) return true;
+  const configured = config.auth.token;
+  if (configured === "") return false; // misconfiguration → deny everything
+  const header = req.headers["authorization"] ?? "";
+  const prefix = "Bearer ";
+  if (!header.startsWith(prefix)) return false;
+  return safeEqual(header.slice(prefix.length), configured);
+}
+
 async function handleGenerate(
   req: IncomingMessage,
   res: ServerResponse,
@@ -145,13 +168,22 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch): Server {
         const url = (req.url ?? "/").split("?")[0];
 
         if (method === "POST" && url === "/generate") {
+          if (!isAuthorized(req, config)) {
+            sendJson(res, 401, { error: "unauthorized" });
+            return;
+          }
           await handleGenerate(req, res, config, fetchFn);
           return;
         }
         if (method === "GET" && url === "/styles") {
+          if (!isAuthorized(req, config)) {
+            sendJson(res, 401, { error: "unauthorized" });
+            return;
+          }
           handleStyles(res);
           return;
         }
+        // /health is intentionally NEVER gated — monitoring must work without the token.
         if (method === "GET" && url === "/health") {
           await handleHealth(res, config, fetchFn);
           return;

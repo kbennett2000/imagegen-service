@@ -9,12 +9,18 @@ import { fileURLToPath } from "node:url";
 export interface Config {
   readonly comfyui: { readonly url: string };
   readonly server: { readonly host: string; readonly port: number };
+  // Optional shared-token auth (ADR-0002). Disabled by default: fully open on the trusted LAN,
+  // matching the open-ComfyUI/Chronicle stance. The token gates /generate + /styles for the
+  // case where a non-trusted device might join; /health stays open regardless.
+  readonly auth: { readonly enabled: boolean; readonly token: string };
 }
 
 // Last-resort defaults (ADR-0001): host 0.0.0.0 is LAN-exposed BY DESIGN.
+// auth OFF by default (ADR-0002): behavior identical to the open Slice-1 service.
 export const CONFIG_DEFAULTS: Config = {
   comfyui: { url: "http://localhost:8188" },
   server: { host: "0.0.0.0", port: 8189 },
+  auth: { enabled: false, token: "" },
 };
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
