@@ -171,6 +171,51 @@ const AUTH_CONFIG: Config = {
   auth: { enabled: true, token: "s3cret-token" },
 };
 
+// ---- Built-in dev/test UI (served at / and /index.html) ----
+
+test("GET / -> 200 text/html with the test-UI form", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /^text\/html/);
+    const html = await res.text();
+    assert.match(html, /<form/i);
+    assert.match(html, /id="prompt"/); // the required prompt control
+    assert.match(html, /dev \/ test tool/i); // clearly labeled a dev/test tool
+    assert.equal(mock.submitted.length, 0); // serving the page never touches ComfyUI
+  } finally {
+    await svc.close();
+  }
+});
+
+test("GET /index.html -> 200 text/html (same page)", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/index.html`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /^text\/html/);
+    const html = await res.text();
+    assert.match(html, /<form/i);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("GET / -> served ungated even when auth is enabled (no token needed for the page)", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock, AUTH_CONFIG);
+  try {
+    const res = await fetch(`${svc.base}/`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /^text\/html/);
+  } finally {
+    await svc.close();
+  }
+});
+
 test("auth disabled (default) -> /generate open without a token", async () => {
   const mock = new MockComfy();
   const svc = await startService(mock); // default CONFIG has auth disabled
