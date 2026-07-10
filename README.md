@@ -11,6 +11,11 @@ selection, style → LoRA recipe injection, the ComfyUI transport, never-throw +
 timeouts) and drops Chronicle's prompt construction and disk saving: callers send a finished
 prompt and get raw PNG bytes back to persist themselves.
 
+> **📖 New here, or not a developer?** Start with the friendly, plain-language
+> **[user documentation](docs/README.md)** — what this is, why you'd want it, and how to install
+> and use it by following one page for your platform. The rest of this README is the developer
+> reference (API, config, deployment).
+
 ## How it fits on the LAN
 
 This service runs **on the GPU box** (next to ComfyUI). Other apps on the LAN don't talk to
