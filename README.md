@@ -151,6 +151,25 @@ curl http://localhost:8189/health
 
 `lorasLoaded` reports which recipe LoRAs are actually present on the ComfyUI host.
 
+## Built-in test UI
+
+For quick manual checks, the server also serves a tiny **dev/test** page at `GET /` (and
+`GET /index.html`) — a single self-contained HTML file ([`src/ui.html`](src/ui.html), inline CSS +
+vanilla JS, no build step, no new deps). Open it in a browser:
+
+```
+http://localhost:8189/        # or http://<gpu-box-ip>:8189/ from another machine
+```
+
+It shows a health line (ComfyUI reachable? how many recipe LoRAs), a style dropdown populated from
+`/styles`, and a form (prompt, negative prompt, style, quality, seed) that POSTs to `/generate` and
+renders the returned PNG with the elapsed time; errors (401/422/503) are shown readably. It's a
+convenience harness only — not a production surface.
+
+When `auth.enabled` is `true`, paste the token into the page's **Auth token** field: `/styles` and
+`/generate` are gated (the dropdown shows an "enter token" hint until you do), while the page itself
+and `/health` always load without one.
+
 ## Deployment (systemd)
 
 For an always-on host, run the service under **systemd** so it starts on boot and restarts on

@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>imagegen-service — test UI</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      margin: 0; padding: 1.5rem; line-height: 1.4;
+      max-width: 1100px;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+    .devtag {
+      display: inline-block; font-size: .7rem; font-weight: 700; letter-spacing: .05em;
+      text-transform: uppercase; padding: .15rem .45rem; border-radius: .25rem;
+      background: #b45309; color: #fff; vertical-align: middle; margin-left: .5rem;
+    }
+    .sub { color: #6b7280; font-size: .85rem; margin: 0 0 1rem; }
+    .status {
+      font-size: .85rem; padding: .5rem .75rem; border-radius: .35rem;
+      border: 1px solid #d1d5db; margin-bottom: 1rem;
+    }
+    .status.ok { border-color: #16a34a; }
+    .status.bad { border-color: #dc2626; }
+    .layout { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; }
+    form { flex: 1 1 340px; min-width: 300px; }
+    .result { flex: 1 1 380px; min-width: 300px; }
+    label { display: block; font-size: .8rem; font-weight: 600; margin: .75rem 0 .2rem; }
+    .hint { font-weight: 400; color: #6b7280; }
+    input, select, textarea, button {
+      font: inherit; width: 100%; padding: .45rem .55rem; border-radius: .35rem;
+      border: 1px solid #9ca3af; background: Canvas; color: CanvasText;
+    }
+    textarea { resize: vertical; min-height: 4.5rem; }
+    button {
+      margin-top: 1rem; font-weight: 600; cursor: pointer;
+      background: #2563eb; color: #fff; border-color: #2563eb;
+    }
+    button:disabled { opacity: .6; cursor: progress; }
+    .row { display: flex; gap: .75rem; }
+    .row > div { flex: 1; }
+    .err {
+      white-space: pre-wrap; border: 1px solid #dc2626; border-radius: .35rem;
+      padding: .6rem .75rem; margin-top: 1rem; font-size: .85rem;
+      background: rgba(220,38,38,.08);
+    }
+    .meta { font-size: .8rem; color: #6b7280; margin: .5rem 0; }
+    img.out { max-width: 100%; border: 1px solid #d1d5db; border-radius: .35rem; display: block; }
+    .spinner {
+      display: inline-block; width: .9em; height: .9em; margin-right: .4em;
+      border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+      animation: spin .7s linear infinite; vertical-align: -.1em;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .placeholder { color: #9ca3af; font-size: .85rem; border: 1px dashed #d1d5db;
+      border-radius: .35rem; padding: 2rem 1rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>imagegen-service <span class="devtag">dev / test tool</span></h1>
+  <p class="sub">A throwaway browser harness for exercising <code>POST /generate</code>. Not for production use.</p>
+
+  <div id="status" class="status">Checking service health…</div>
+
+  <div class="layout">
+    <form id="form">
+      <label for="prompt">Prompt <span class="hint">(required)</span></label>
+      <textarea id="prompt" required placeholder="a stone bridge over a misty gorge"></textarea>
+
+      <label for="negativePrompt">Negative prompt <span class="hint">(optional)</span></label>
+      <input id="negativePrompt" type="text" placeholder="blurry, extra text" />
+
+      <label for="style">Style</label>
+      <select id="style"><option value="">(none / prompt-only)</option></select>
+
+      <div class="row">
+        <div>
+          <label for="quality">Quality</label>
+          <select id="quality">
+            <option value="fast">fast</option>
+            <option value="standard" selected>standard</option>
+            <option value="high">high</option>
+          </select>
+        </div>
+        <div>
+          <label for="seed">Seed <span class="hint">(blank = random)</span></label>
+          <input id="seed" type="number" step="1" placeholder="random" />
+        </div>
+      </div>
+
+      <label for="token">Auth token <span class="hint">(only if auth is enabled)</span></label>
+      <input id="token" type="text" placeholder="Bearer token — leave blank on open LAN" autocomplete="off" />
+
+      <button id="go" type="submit">Generate</button>
+    </form>
+
+    <div class="result">
+      <div id="meta" class="meta"></div>
+      <div id="output"><div class="placeholder">The generated image will appear here.</div></div>
+      <div id="error" class="err" hidden></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    const errorEl = $("error");
+    const metaEl = $("meta");
+    const outputEl = $("output");
+    const styleSel = $("style");
+    let currentObjectUrl = null;
+
+    // Build headers, adding the bearer token only when one is entered.
+    function authHeaders(extra) {
+      const h = Object.assign({}, extra || {});
+      const token = $("token").value.trim();
+      if (token) h["Authorization"] = "Bearer " + token;
+      return h;
+    }
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.hidden = false;
+    }
+    function clearError() {
+      errorEl.hidden = true;
+      errorEl.textContent = "";
+    }
+
+    // Read an error body readably: prefer the JSON { error } field, fall back to status text.
+    async function errorMessage(res) {
+      try {
+        const body = await res.json();
+        if (body && typeof body.error === "string") return body.error;
+        return JSON.stringify(body);
+      } catch {
+        return res.statusText || ("HTTP " + res.status);
+      }
+    }
+
+    async function loadHealth() {
+      try {
+        const res = await fetch("/health");
+        const h = await res.json();
+        if (h.comfyuiReachable) {
+          statusEl.className = "status ok";
+          statusEl.textContent = "ComfyUI reachable at " + h.comfyuiUrl +
+            " — " + (h.lorasLoaded ? h.lorasLoaded.length : 0) + " recipe LoRA(s) present.";
+        } else {
+          statusEl.className = "status bad";
+          statusEl.textContent = "ComfyUI NOT reachable at " + (h.comfyuiUrl || "?") +
+            " — /generate will return 503 until it is up.";
+        }
+      } catch (e) {
+        statusEl.className = "status bad";
+        statusEl.textContent = "Could not reach the service /health endpoint: " + e;
+      }
+    }
+
+    // Populate the style dropdown. On 401 (auth on, no/invalid token) show a hint instead of breaking.
+    async function loadStyles() {
+      // Reset to just the prompt-only option before (re)loading.
+      styleSel.innerHTML = '<option value="">(none / prompt-only)</option>';
+      try {
+        const res = await fetch("/styles", { headers: authHeaders() });
+        if (res.status === 401) {
+          const opt = document.createElement("option");
+          opt.value = ""; opt.textContent = "(styles need a token — enter one and click reload)";
+          opt.disabled = true;
+          styleSel.appendChild(opt);
+          return;
+        }
+        if (!res.ok) return;
+        const body = await res.json();
+        for (const s of (body.styles || [])) {
+          const opt = document.createElement("option");
+          opt.value = s.name;
+          opt.textContent = s.name;
+          styleSel.appendChild(opt);
+        }
+      } catch {
+        /* leave prompt-only option in place */
+      }
+    }
+
+    // Re-fetch styles when a token is typed/pasted, so the dropdown fills once authorized.
+    $("token").addEventListener("change", loadStyles);
+
+    $("form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      clearError();
+
+      const prompt = $("prompt").value.trim();
+      if (!prompt) { showError("Prompt is required."); return; }
+
+      // Build the body from non-empty fields only.
+      const body = { prompt: prompt };
+      const neg = $("negativePrompt").value.trim();
+      if (neg) body.negativePrompt = neg;
+      const style = styleSel.value;
+      if (style) body.style = style;
+      body.quality = $("quality").value;
+      const seedRaw = $("seed").value.trim();
+      if (seedRaw !== "") body.seed = Number(seedRaw);
+
+      const go = $("go");
+      go.disabled = true;
+      const label = go.textContent;
+      go.innerHTML = '<span class="spinner"></span>Generating… (~5–15s)';
+      metaEl.textContent = "";
+      const started = performance.now();
+
+      try {
+        const res = await fetch("/generate", {
+          method: "POST",
+          headers: authHeaders({ "content-type": "application/json" }),
+          body: JSON.stringify(body),
+        });
+        const elapsed = ((performance.now() - started) / 1000).toFixed(1);
+
+        if (!res.ok) {
+          const msg = await errorMessage(res);
+          showError("HTTP " + res.status + " — " + msg);
+          metaEl.textContent = "Failed after " + elapsed + "s.";
+          return;
+        }
+
+        const blob = await res.blob();
+        if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+        currentObjectUrl = URL.createObjectURL(blob);
+        outputEl.innerHTML = "";
+        const img = document.createElement("img");
+        img.className = "out";
+        img.src = currentObjectUrl;
+        img.alt = "generated image";
+        outputEl.appendChild(img);
+        metaEl.textContent = "Done in " + elapsed + "s — " + Math.round(blob.size / 1024) + " KB" +
+          (seedRaw !== "" ? " — seed " + seedRaw : " — random seed");
+      } catch (e) {
+        showError("Request failed: " + e);
+      } finally {
+        go.disabled = false;
+        go.textContent = label;
+      }
+    });
+
+    loadHealth();
+    loadStyles();
+  </script>
+</body>
+</html>

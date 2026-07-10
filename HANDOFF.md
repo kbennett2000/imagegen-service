@@ -24,7 +24,13 @@ unit, and docs.
   `/health` is never gated. Auth lives entirely in `src/server.ts` (`isAuthorized`) + `config.ts`.
 - README: full usage — remote-GPU story, `/generate|/styles|/health` with curl (incl. a
   bearer-token example), config setup, and the systemd install/operate steps.
-- Tests: `npm run test:unit` — **29 passing** (22 existing + 7 auth cases), CI-safe.
+- Test UI (additive dev convenience, no ADR): the server serves a self-contained page at `GET /`
+  and `GET /index.html` (`src/ui.html`, inline CSS + vanilla JS, no deps/build). Read once into
+  `UI_HTML` in `src/server.ts` and served **ungated** so a token can be entered into it; the
+  engine/API/contract are untouched. On load it hits `/health` + `/styles`, and its form POSTs to
+  `/generate` (optional bearer-token field → works when `auth.enabled`). README documents it.
+- Tests: `npm run test:unit` — **32 passing** (29 prior + 3 UI cases: `GET /` 200 text/html with
+  the form, `/index.html`, and `/` ungated under auth), CI-safe.
 - Verified live on this box (ComfyUI 0.27.0): auth-off parity works; auth-on → `/generate` 401
   without header, real PNG with the correct token; `/styles` 401→200; `/health` open either way.
 

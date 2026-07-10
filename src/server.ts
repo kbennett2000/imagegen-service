@@ -3,6 +3,7 @@
 // a JSON error body with an appropriate status.
 
 import { timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import type { Config } from "./config.js";
@@ -18,10 +19,20 @@ import { STYLE_LORAS } from "./style-loras.js";
 
 const MAX_BODY_BYTES = 1_000_000; // generous cap for a small JSON body
 
+// The built-in dev/test page, served at GET / and GET /index.html. Read once at module load
+// (resolves next to this file regardless of cwd) so requests serve from memory. Self-contained —
+// inline CSS + vanilla JS, no external requests, no build step.
+const UI_HTML = readFileSync(new URL("./ui.html", import.meta.url), "utf8");
+
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload);
   res.writeHead(status, { "content-type": "application/json" });
   res.end(body);
+}
+
+function sendHtml(res: ServerResponse, html: string): void {
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.end(html);
 }
 
 function sendPng(res: ServerResponse, bytes: Buffer): void {
@@ -167,6 +178,12 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch): Server {
         const method = req.method ?? "GET";
         const url = (req.url ?? "/").split("?")[0];
 
+        // Built-in dev/test UI — served ungated so the page always loads and a token can be
+        // entered into it. Its own fetches to /styles and /generate carry that token.
+        if (method === "GET" && (url === "/" || url === "/index.html")) {
+          sendHtml(res, UI_HTML);
+          return;
+        }
         if (method === "POST" && url === "/generate") {
           if (!isAuthorized(req, config)) {
             sendJson(res, 401, { error: "unauthorized" });
