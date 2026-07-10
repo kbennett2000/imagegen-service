@@ -158,26 +158,27 @@ crash — instead of leaving `npm start` in a terminal. This is for the machine 
 service (the GPU box); other devices just POST to it over the LAN.
 
 A ready-to-install unit lives at [`deploy/imagegen-service.service`](deploy/imagegen-service.service).
-It runs `npm start` (build-free `tsx src/index.ts`) as the same user, next to `comfyui.service`,
-and reads all runtime config from `config.json` — no secrets or paths are baked into the unit.
+It runs the same thing `npm start` runs (build-free `tsx src/index.ts`) as the same user, next to
+`comfyui.service`, and reads all runtime config from `config.json` — no secrets or paths are baked
+into the unit.
+
+> **⚠️ The `ExecStart` node path is nvm-version-specific.** systemd runs with a bare `PATH` and
+> does **not** see your login shell or nvm, so `npm` and a bare `node` are invisible to it — an
+> `ExecStart=/usr/bin/npm` fails with `status=203/EXEC`. The unit therefore invokes **node by
+> absolute path** (`--import tsx src/index.ts`, exactly how the test runner loads tsx) and sets
+> `Environment=PATH` so node's siblings resolve. That path embeds the nvm node version
+> (`v22.22.3`): **if you upgrade node, update both the `ExecStart` and the `Environment=PATH` line**
+> (or point them at a stable symlink you control, e.g. `/usr/local/bin/node`, to avoid re-editing
+> on every upgrade). The sibling `chronicle.service` on the i5 server needs this same fix.
 
 ### Install
 
-1. Review the unit and adjust `User` / `WorkingDirectory` if your checkout differs, and confirm
-   `ExecStart`:
+1. Review the unit and adjust it for your box — `User` / `WorkingDirectory` if your checkout
+   differs, and **the node path** in `ExecStart` + `Environment=PATH` to match `which node`:
 
    ```bash
+   which node                        # e.g. /home/kb/.nvm/versions/node/v22.22.3/bin/node
    nano deploy/imagegen-service.service
-   ```
-
-   `ExecStart` must be an **absolute** npm path — systemd ignores your login `PATH`, and
-   **nvm-installed node is invisible to it**. Find yours with `which npm`. If it lives under
-   `~/.nvm` (e.g. `/home/kb/.nvm/versions/node/v22.22.3/bin/npm`), either hard-code that path in
-   `ExecStart` or install a system Node so `/usr/bin/npm` exists:
-
-   ```bash
-   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-   sudo apt install -y nodejs
    ```
 
 2. Install and enable it (start on boot + start now):
