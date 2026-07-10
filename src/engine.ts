@@ -1,0 +1,296 @@
+// The reusable engine, reimplemented from Chronicle's src/image-backends/local.ts (clean-room,
+// no import). Responsibilities: quality tier -> workflow selection, style -> LoRA recipe
+// injection (trigger + LoRA node + strength + noRefiner), and the ComfyUI transport
+// (POST /prompt -> poll /history BY OWN prompt_id -> fetch /view). Never throws.
+
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { ensureTrigger, lookupStyleLora, type StyleLora } from "./style-loras.js";
+
+// fetch is dependency-injected so tests drive the whole HTTP flow with no GPU / no ComfyUI.
+export type FetchFn = typeof fetch;
+
+export type Quality = "fast" | "standard" | "high";
+export const QUALITIES: readonly Quality[] = ["fast", "standard", "high"];
+
+export interface GenerateParams {
+  prompt: string;
+  negativePrompt?: string;
+  style?: string;
+  quality?: Quality;
+  seed?: number;
+}
+
+export type GenerateResult =
+  | { ok: true; bytes: Buffer }
+  | { ok: false; error: string };
+
+const WORKFLOWS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "workflows");
+const BASE_WORKFLOW = "sdxl-txt2img.json";
+const REFINER_WORKFLOW = "sdxl-refiner.json";
+
+const POLL_INTERVAL_MS = 500; // between /history polls
+const REQUEST_TIMEOUT_MS = 30_000; // per individual HTTP request
+
+// ---- tier selection (reused values) ------------------------------------------------------
+
+export interface TierParams {
+  workflow: string;
+  steps?: number; // base-sampler step override; undefined => use the workflow's own schedule
+  timeoutMs: number; // wall-clock budget for the history poll loop
+}
+
+export const TIER_CONFIG: Record<Quality, TierParams> = {
+  fast: { workflow: BASE_WORKFLOW, steps: 15, timeoutMs: 120_000 },
+  standard: { workflow: BASE_WORKFLOW, steps: 25, timeoutMs: 120_000 },
+  high: { workflow: REFINER_WORKFLOW, timeoutMs: 300_000 },
+};
+
+export function resolveTier(quality?: Quality): TierParams {
+  return TIER_CONFIG[quality ?? "standard"] ?? TIER_CONFIG.standard;
+}
+
+// The base chain is the only LoRA-wired chain. When a recipe is active and the resolved tier is
+// the refiner (high), render base high-steps instead — keeping high's raised time budget. This
+// is the noRefiner rule.
+export function resolveEffectiveTier(quality: Quality | undefined, recipe: StyleLora): TierParams {
+  const tier = resolveTier(quality);
+  if (tier.workflow !== REFINER_WORKFLOW) return tier;
+  if (!recipe.noRefiner) {
+    console.error(
+      `[engine] LoRA "${recipe.loraFile}" requested at quality=high, but refiner-aware LoRA injection isn't implemented — rendering base high-steps instead`,
+    );
+  }
+  return { workflow: BASE_WORKFLOW, steps: 40, timeoutMs: tier.timeoutMs };
+}
+
+// ---- graph mutation helpers (reused) -----------------------------------------------------
+
+type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
+
+function setNodeText(graph: Graph, id: string, text: string): void {
+  const node = graph[id];
+  if (node) node.inputs.text = text; // no-op if the node is absent
+}
+
+function appendNodeText(graph: Graph, id: string, extra: string): void {
+  const node = graph[id];
+  if (node) node.inputs.text = `${node.inputs.text}, ${extra}`;
+}
+
+function setNodeSeed(graph: Graph, id: string, seed: number): void {
+  const node = graph[id];
+  if (!node) return;
+  if ("noise_seed" in node.inputs) node.inputs.noise_seed = seed; // KSamplerAdvanced (refiner)
+  else node.inputs.seed = seed; // KSampler (base)
+}
+
+// applyLora — copied exactly. Inject a LoraLoader as node "20" (an unused id in both templates)
+// between the checkpoint (node "4") and its consumers, then repoint model/clip edges.
+export function applyLora(graph: Graph, recipe: StyleLora): void {
+  graph["20"] = {
+    class_type: "LoraLoader",
+    inputs: {
+      lora_name: recipe.loraFile,
+      strength_model: recipe.strength,
+      strength_clip: recipe.strength,
+      model: ["4", 0],
+      clip: ["4", 1],
+    },
+  };
+  if (graph["6"]) graph["6"].inputs.clip = ["20", 1]; // positive CLIP encode <- LoRA clip
+  if (graph["7"]) graph["7"].inputs.clip = ["20", 1]; // negative CLIP encode <- LoRA clip
+  if (graph["3"]) graph["3"].inputs.model = ["20", 0]; // sampler <- LoRA model
+}
+
+// ---- ComfyUI transport helpers -----------------------------------------------------------
+
+function comfyBase(url: string): string {
+  return (url || "http://localhost:8188").replace(/\/$/, "");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomSeed(): number {
+  // Service runtime (not a workflow script) — Math.random is fine here.
+  return Math.floor(Math.random() * 0x1_0000_0000);
+}
+
+// Query ComfyUI's own filesystem for the LoRAs it can load. Used by /health and by the
+// per-request availability check. Returns [] on any failure.
+export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[]> {
+  try {
+    const res = await fetchFn(`${base}/object_info/LoraLoader`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) return [];
+    const info = (await res.json().catch(() => ({}))) as Record<string, any>;
+    const names = info?.LoraLoader?.input?.required?.lora_name?.[0];
+    return Array.isArray(names) ? (names as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function loraAvailable(base: string, fetchFn: FetchFn, loraFile: string): Promise<boolean> {
+  const names = await listLoras(base, fetchFn);
+  return names.includes(loraFile);
+}
+
+// Health probe: is ComfyUI reachable, and does its /object_info respond? Returns the full list
+// of LoRA names ComfyUI can load (empty when unreachable). Distinguishes reachability from an
+// empty lora set via the `reachable` flag.
+export async function probeComfy(
+  comfyUrl: string,
+  fetchFn: FetchFn = fetch,
+): Promise<{ reachable: boolean; loras: string[] }> {
+  const base = comfyBase(comfyUrl);
+  try {
+    const res = await fetchFn(`${base}/object_info/LoraLoader`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) return { reachable: false, loras: [] };
+    const info = (await res.json().catch(() => ({}))) as Record<string, any>;
+    const names = info?.LoraLoader?.input?.required?.lora_name?.[0];
+    return { reachable: true, loras: Array.isArray(names) ? (names as string[]) : [] };
+  } catch {
+    return { reachable: false, loras: [] };
+  }
+}
+
+interface OutImage {
+  filename: string;
+  subfolder: string;
+  type: string;
+}
+
+// ---- main entry --------------------------------------------------------------------------
+
+export async function generateImage(
+  comfyUrl: string,
+  params: GenerateParams,
+  fetchFn: FetchFn = fetch,
+): Promise<GenerateResult> {
+  const base = comfyBase(comfyUrl);
+  try {
+    let positivePrompt = params.prompt;
+    let tier = resolveTier(params.quality);
+
+    // LoRA block — self-contained so it never taints the outer flow. Falls back to prompt-only
+    // if the recipe's LoRA isn't actually loaded on the GPU host, or on any error.
+    let recipe = lookupStyleLora(params.style);
+    if (recipe) {
+      try {
+        tier = resolveEffectiveTier(params.quality, recipe);
+        if (await loraAvailable(base, fetchFn, recipe.loraFile)) {
+          positivePrompt = ensureTrigger(positivePrompt, recipe.trigger);
+        } else {
+          console.error(
+            `[engine] LoRA "${recipe.loraFile}" not present on ComfyUI host — rendering prompt-only`,
+          );
+          recipe = undefined;
+          tier = resolveTier(params.quality);
+        }
+      } catch {
+        recipe = undefined;
+        tier = resolveTier(params.quality);
+      }
+    }
+
+    // Fresh graph clone per call — no shared mutable state (concurrency-critical).
+    const graph = JSON.parse(
+      readFileSync(path.join(WORKFLOWS_DIR, tier.workflow), "utf8"),
+    ) as Graph;
+
+    // Inject positive prompt (base + refiner positive nodes).
+    for (const id of ["6", "12"]) setNodeText(graph, id, positivePrompt);
+    // Baseline negatives already live in the template; append caller's, then recipe's.
+    if (params.negativePrompt) {
+      for (const id of ["7", "13"]) appendNodeText(graph, id, params.negativePrompt);
+    }
+    if (recipe?.extraNegatives) {
+      for (const id of ["7", "13"]) appendNodeText(graph, id, recipe.extraNegatives);
+    }
+    const seed = params.seed ?? randomSeed();
+    for (const id of ["3", "14"]) setNodeSeed(graph, id, seed);
+    if (tier.steps != null && graph["3"] && "steps" in graph["3"].inputs) {
+      graph["3"].inputs.steps = tier.steps; // base-sampler step override only
+    }
+    if (recipe) applyLora(graph, recipe);
+
+    // POST /prompt
+    const clientId = `imagegen-${randomSeed().toString(16)}`;
+    const res = await fetchFn(`${base}/prompt`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: graph, client_id: clientId }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, error: `ComfyUI /prompt returned ${res.status} ${body.slice(0, 200)}` };
+    }
+    const submit = (await res.json()) as {
+      prompt_id?: string;
+      node_errors?: Record<string, unknown>;
+    };
+    if (submit.node_errors && Object.keys(submit.node_errors).length) {
+      return {
+        ok: false,
+        error: `ComfyUI rejected the workflow: ${JSON.stringify(submit.node_errors).slice(0, 300)}`,
+      };
+    }
+    if (!submit.prompt_id) return { ok: false, error: "ComfyUI /prompt returned no prompt_id" };
+    const promptId = submit.prompt_id;
+
+    // Poll /history/<promptId> — ALWAYS this request's OWN id, never "latest". This is the
+    // concurrency guarantee: request N resolves to request N's image, whatever the order.
+    const deadline = Date.now() + tier.timeoutMs;
+    let image: OutImage | undefined;
+    while (Date.now() < deadline) {
+      await sleep(POLL_INTERVAL_MS);
+      const h = await fetchFn(`${base}/history/${promptId}`, {
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }).catch(() => null);
+      if (!h || !h.ok) continue;
+      const hist = (await h.json().catch(() => ({}))) as Record<string, any>;
+      const entry = hist[promptId]; // keyed by our prompt_id
+      if (!entry) continue;
+      if (entry.status?.status_str === "error") {
+        return {
+          ok: false,
+          error: `ComfyUI execution error: ${JSON.stringify(entry.status).slice(0, 300)}`,
+        };
+      }
+      for (const node of Object.values(entry.outputs ?? {}) as any[]) {
+        const first = (node.images ?? [])[0] as OutImage | undefined;
+        if (first) {
+          image = first;
+          break;
+        }
+      }
+      if (image) break;
+    }
+    if (!image) return { ok: false, error: `ComfyUI produced no image within ${tier.timeoutMs}ms` };
+
+    // Fetch the PNG bytes via /view.
+    const q = new URLSearchParams({
+      filename: image.filename,
+      subfolder: image.subfolder,
+      type: image.type,
+    });
+    const view = await fetchFn(`${base}/view?${q}`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!view.ok) return { ok: false, error: `ComfyUI /view returned ${view.status}` };
+    const bytes = Buffer.from(await view.arrayBuffer());
+    return { ok: true, bytes };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `ComfyUI request failed: ${reason}` };
+  }
+}
