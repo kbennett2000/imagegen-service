@@ -1,0 +1,16 @@
+{
+  "name": "imagegen-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone ComfyUI-fronting image API — clean-room extraction of Chronicle's local image backend",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "test:unit": "node --import tsx --test \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

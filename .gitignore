@@ -5,6 +5,15 @@
 # The shared engine pin (.claude/settings.json) is intentionally NOT ignored — it travels with
 # the repo so every clone runs on the same model/effort.
 
+# Node
+/node_modules/
+
+# Local runtime config (secrets/host-specific) — the committed template is config.example.json
+/config.json
+
+# Local generated output from manual verification
+/out.png
+
 # cycle runtime
 /.factory/
 /cycle.log
