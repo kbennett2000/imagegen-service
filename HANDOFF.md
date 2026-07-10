@@ -6,10 +6,18 @@ Consequences. **The generation engine is untouched** — `src/engine.ts`, `src/s
 and `src/workflows/*` are unchanged; this slice adds only an HTTP-layer auth gate, a systemd
 unit, and docs.
 
-- systemd: `deploy/imagegen-service.service` — runs `npm start` (tsx `src/index.ts`) as the same
-  user next to `comfyui.service`, restart-on-failure, enable-on-boot. No secrets/paths in the
-  unit; the app reads `config.json`. `systemd-analyze verify` passes (the only note is
-  `/usr/bin/npm` absent on this box, since npm is nvm-installed — documented caveat in the README).
+- systemd: `deploy/imagegen-service.service` — runs `tsx src/index.ts` (what `npm start` runs) as
+  the same user next to `comfyui.service`, restart-on-failure, enable-on-boot. No secrets/paths in
+  the unit; the app reads `config.json`. **ExecStart invokes node by ABSOLUTE path**
+  (`/home/kb/.nvm/versions/node/v22.22.3/bin/node --import tsx src/index.ts`) with a matching
+  `Environment=PATH`, because systemd has a bare PATH and can't see nvm — the earlier
+  `ExecStart=/usr/bin/npm start` crash-looped with status=203/EXEC. The node path is
+  nvm-version-specific: **update ExecStart + Environment=PATH when node is upgraded** (README has
+  the caveat). The same fix applies to Chronicle's `chronicle.service` on the i5 server.
+  `systemd-analyze verify` passes clean. Verified live: running the exact ExecStart command came up
+  and stayed up, `/health` returned `comfyuiReachable:true` + all 12 LoRAs. (The `sudo cp` +
+  `daemon-reload` + `restart` to swap the installed unit must be run by a human — sudo isn't
+  available to the headless cycle.)
 - Auth (ADR-0002): `config.auth = { enabled, token }`, **OFF by default** (behavior identical to
   Slice 1). When enabled, `/generate` + `/styles` require `Authorization: Bearer <token>` (bare
   401 on miss/mismatch, constant-time compare via `node:crypto`, fail-closed on empty token);

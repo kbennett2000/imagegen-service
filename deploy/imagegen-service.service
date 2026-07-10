@@ -1,6 +1,6 @@
 # imagegen-service — standalone ComfyUI-fronting image API. systemd unit.
 # Modeled on the sibling comfyui.service and chronicle/deploy/chronicle.service: runs the
-# native `npm start` (build-free `tsx src/index.ts`) as a supervised, restart-on-crash,
+# same thing `npm start` runs (build-free `tsx src/index.ts`) as a supervised, restart-on-crash,
 # start-on-boot service. Runs as the same user, next to comfyui.service.
 #
 #   sudo cp deploy/imagegen-service.service /etc/systemd/system/imagegen-service.service
@@ -10,6 +10,13 @@
 # All runtime config (comfyui.url, server.host/port, the optional auth token) is read from the
 # repo's config.json by the app itself — NOT from this unit. Do NOT put secrets or paths here.
 # Adjust User / WorkingDirectory below if your checkout differs from the values shown.
+#
+# NODE PATH IS nvm-VERSION-SPECIFIC. systemd runs with a bare PATH and does NOT see your login
+# shell / nvm, so `npm` and a bare `node` are invisible to it (ExecStart=/usr/bin/npm fails with
+# status=203/EXEC). We therefore invoke node by ABSOLUTE path below. That path embeds the nvm
+# node version (v22.22.3) — if you upgrade node, update ExecStart and the Environment=PATH line
+# (or point them at a stable symlink you control, e.g. /usr/local/bin/node). Find your path with
+# `which node`. The sibling chronicle.service on the i5 server needs this same fix.
 
 [Unit]
 Description=imagegen-service (ComfyUI-fronting image API)
@@ -25,11 +32,13 @@ User=kb
 # Absolute path to the repo checkout.
 WorkingDirectory=/home/kb/Desktop/projects/imagegen-service
 
-# The same command `npm start` runs (tsx src/index.ts). systemd does NOT use your login
-# shell's PATH, and nvm-installed node is invisible to it — use an absolute npm path.
-# Find yours with `which npm`; if it lives under ~/.nvm, hard-code that path here or install a
-# system-wide Node so /usr/bin/npm exists.
-ExecStart=/usr/bin/npm start
+# Run the same thing `npm start` runs (tsx src/index.ts) but invoke node by ABSOLUTE path so
+# systemd — which has no nvm and a bare PATH — can find it. `--import tsx` is exactly how the
+# test runner loads tsx, so no npm/tsx bin lookup is needed. Environment=PATH makes node's
+# siblings (npm, etc.) resolvable to any child process the app might spawn.
+# See the header note: this node path is nvm-version-specific; update it when node is upgraded.
+Environment=PATH=/home/kb/.nvm/versions/node/v22.22.3/bin:/usr/bin:/bin
+ExecStart=/home/kb/.nvm/versions/node/v22.22.3/bin/node --import tsx src/index.ts
 
 Restart=on-failure
 RestartSec=5
