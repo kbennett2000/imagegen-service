@@ -24,6 +24,30 @@ So from another machine you call `http://<gpu-box-ip>:8189/generate`. The servic
 `0.0.0.0` by design (see [Config](#config)); an optional shared token can gate it (see
 [Authentication](#authentication)).
 
+## Quick install (whole stack, from scratch)
+
+If you have a machine with a **supported NVIDIA GPU** and just want everything set up — ComfyUI,
+the SDXL models + LoRAs, this service, and reboot-surviving auto-start services — run the installer
+for your platform. It automates the entire stack; the **only** thing it won't touch is the NVIDIA
+driver (it detects the driver and, if it's missing or too old, tells you exactly what to install).
+
+```bash
+# Ubuntu Linux
+bash install/install-linux.sh            # full install (safe to re-run)
+bash install/install-linux.sh --check    # just check my system, change nothing
+```
+
+```powershell
+# Windows (in PowerShell)
+powershell -ExecutionPolicy Bypass -File install\install-windows.ps1           # full install
+powershell -ExecutionPolicy Bypass -File install\install-windows.ps1 -Check    # check only
+```
+
+When it finishes it prints a success summary with the URL to open. Design details are in
+[docs/adr/0003-auto-installer.md](docs/adr/0003-auto-installer.md); model download URLs live in
+[install/models.manifest](install/models.manifest). (Full end-user documentation is a later docs
+slice.) The rest of this README covers running and configuring the service by hand.
+
 ## Requirements
 
 - Node 20+ (uses built-in `fetch` and `node --test`).

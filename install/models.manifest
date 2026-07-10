@@ -1,0 +1,58 @@
+# models.manifest — the model files the installers download into ComfyUI's model dirs.
+#
+# ONE READABLE PLACE for every URL. Both install-linux.sh and install-windows.ps1 read this
+# file so the source list lives in exactly one spot. Non-technical users never touch it.
+#
+# Format (pipe-delimited, one file per line; blank lines and lines starting with # are ignored):
+#
+#   <subdir>|<dest-filename>|<primary-url>|<fallback-url>|<min-megabytes>
+#
+#   subdir         where under ComfyUI models/ the file goes: checkpoints | vae | loras
+#   dest-filename  the EXACT filename the service references (src/style-loras.ts, workflows/*.json).
+#                  The file is always SAVED under this name regardless of the source's own filename.
+#   primary-url    tried first. Per the spec this is the CivitAI "source" where a direct,
+#                  version-pinned download URL is known; otherwise an ungated Hugging Face mirror.
+#   fallback-url   tried if primary is missing/gated/returns a non-safetensors (e.g. a login page).
+#                  Use "-" when there is no second source.
+#   min-megabytes  the download is REJECTED (and the fallback tried) if the saved file is smaller
+#                  than this. Catches HTML/JSON error pages, which are a few KB, not a real model.
+#
+# Download+verify contract (see download_verify in the installers): skip if the dest file already
+# exists and passes verification -> try primary -> verify (real .safetensors: size >= min AND a
+# valid safetensors header) -> on failure try fallback -> verify -> on TOTAL failure WARN and
+# CONTINUE (that style degrades to prompt-only) rather than failing the whole install.
+#
+# CivitAI note: civitai.com/api/download/models/<versionId> is the original source but is often
+# login-gated; when it is, verification fails and the ungated HF mirror (fallback) is used. That is
+# exactly the gating fall-through the spec calls for.
+#
+# ---------------------------------------------------------------------------------------------
+# SDXL base + refiner + VAE — canonical, ungated Stability AI repos on Hugging Face.
+# ---------------------------------------------------------------------------------------------
+checkpoints|sd_xl_base_1.0.safetensors|https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors|-|6000
+checkpoints|sd_xl_refiner_1.0.safetensors|https://huggingface.co/stabilityai/stable-diffusion-xl-refiner-1.0/resolve/main/sd_xl_refiner_1.0.safetensors|-|5000
+vae|sdxl_vae.safetensors|https://huggingface.co/stabilityai/sdxl-vae/resolve/main/sdxl_vae.safetensors|-|250
+#
+# ---------------------------------------------------------------------------------------------
+# The 12 style LoRAs (filenames + strengths/triggers live in src/style-loras.ts).
+# CivitAI primary where a version-pinned direct URL was resolved; ungated HF mirror otherwise.
+# ---------------------------------------------------------------------------------------------
+loras|pixel-art-xl.safetensors|https://huggingface.co/nerijs/pixel-art-xl/resolve/main/pixel-art-xl.safetensors|-|100
+loras|ClassipeintXL2.1.safetensors|https://huggingface.co/WolfAether21/PONY-DIFFUSION-SDXL-LORA/resolve/main/EMBED/ClassipeintXL2.1.safetensors|https://huggingface.co/nerualdreming/Best_LoRas_Mar24/resolve/main/ClassipeintXL2.1.safetensors|80
+loras|EldritchComicsXL1.2.safetensors|https://civitai.com/api/download/models/305491|-|70
+loras|Lego_XL_v2.1.safetensors|https://huggingface.co/lordjia/lelo-lego-lora-for-xl-sd1-5/resolve/main/Lego_XL_v2.1.safetensors|-|100
+# sketch_style: no exact same-file mirror found; this is a FUNCTIONAL SUBSTITUTE (Linaqruf sketch
+# style XL, ungated, responds to the "sketch" trigger). Verified real .safetensors, ~47MB.
+loras|sketch_style.safetensors|https://huggingface.co/Linaqruf/sketch-style-xl-lora/resolve/main/sketch-style-xl.safetensors|-|25
+# watercolor-orie-xl: no confirmed same-file source located. Left unresolved on purpose — the
+# installer WARNs and continues; the "watercolour" style degrades to prompt-only until a URL is
+# supplied here. TODO(maintainer): fill in a verified source for watercolor-orie-xl.safetensors.
+loras|watercolor-orie-xl.safetensors|-|-|250
+loras|animelora-sdxl.safetensors|https://civitai.com/api/download/models/140052|-|100
+loras|StoryBookRedmond-KidsRedmAF.safetensors|https://huggingface.co/artificialguybr/StoryBookRedmond/resolve/main/StoryBookRedmond-KidsRedmAF.safetensors|-|400
+loras|PixarXL.safetensors|https://huggingface.co/caldwecg/pixar/resolve/main/PixarXL.safetensors|-|130
+# cyberpunk_xl_v1: CivitAI "Cyberpunk SDXL" (models/152914). Direct version URL below; size may
+# differ slightly from the copy on this box (different pinned version) but is a real cyberpunk LoRA.
+loras|cyberpunk_xl_v1.safetensors|https://civitai.com/api/download/models/171178|-|100
+loras|Ukiyo-e-Art-XL.safetensors|https://civitai.com/api/download/models/154278|-|130
+loras|CLAYMATE-v2-sdxl.safetensors|https://huggingface.co/AI2lab/SDXL-loras/resolve/main/CLAYMATE_V2.03_.safetensors|https://huggingface.co/nerualdreming/Best_LoRas_Mar24/resolve/main/CLAYMATE_V2.03_.safetensors|600
