@@ -1,0 +1,41 @@
+# imagegen-service — standalone ComfyUI-fronting image API. systemd unit.
+# Modeled on the sibling comfyui.service and chronicle/deploy/chronicle.service: runs the
+# native `npm start` (build-free `tsx src/index.ts`) as a supervised, restart-on-crash,
+# start-on-boot service. Runs as the same user, next to comfyui.service.
+#
+#   sudo cp deploy/imagegen-service.service /etc/systemd/system/imagegen-service.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now imagegen-service
+#
+# All runtime config (comfyui.url, server.host/port, the optional auth token) is read from the
+# repo's config.json by the app itself — NOT from this unit. Do NOT put secrets or paths here.
+# Adjust User / WorkingDirectory below if your checkout differs from the values shown.
+
+[Unit]
+Description=imagegen-service (ComfyUI-fronting image API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# The Linux user that owns the checkout (same account that runs comfyui.service).
+User=kb
+
+# Absolute path to the repo checkout.
+WorkingDirectory=/home/kb/Desktop/projects/imagegen-service
+
+# The same command `npm start` runs (tsx src/index.ts). systemd does NOT use your login
+# shell's PATH, and nvm-installed node is invisible to it — use an absolute npm path.
+# Find yours with `which npm`; if it lives under ~/.nvm, hard-code that path here or install a
+# system-wide Node so /usr/bin/npm exists.
+ExecStart=/usr/bin/npm start
+
+Restart=on-failure
+RestartSec=5
+
+# Give an in-flight /generate room to finish on stop before SIGKILL.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
