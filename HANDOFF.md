@@ -1,6 +1,15 @@
 # Handoff
 
 ## Current state
+`POST /generate` now accepts optional **`width`/`height`** (PR open for review): validated in
+`parseGenerateBody` (integer, multiple of 8, in `[256, 2048]`, else 422) and applied to the
+`EmptyLatentImage` node `"5"` in `generateImage` (`setNodeSize`), **defaulting to 1024×1024** when
+omitted — fully backward-compatible. Requested by the scriptorium bakery (its cycle S10a needs
+832×1216 SDXL plates; DESIGN §10). Engine otherwise unchanged; no new deps; `process.env` still
+absent. Tests: `engine.test.ts` + `server.test.ts` cover the sized graph, the 1024 default, and a
+422 on a non-multiple-of-8 dimension (`npm run test:unit` → 36 pass).
+
+## Prior state
 Slice 2 built (PR open for review): deployment + optional auth + docs, per ADR-0001's
 Consequences. **The generation engine is untouched** — `src/engine.ts`, `src/style-loras.ts`,
 and `src/workflows/*` are unchanged; this slice adds only an HTTP-layer auth gate, a systemd

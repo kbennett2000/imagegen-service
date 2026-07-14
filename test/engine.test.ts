@@ -161,3 +161,21 @@ test("concurrency: overlapping calls resolve to their own prompt_id even when th
   assert.deepEqual((r1 as { ok: true; bytes: Buffer }).bytes, mock.bytesFor(id1));
   assert.deepEqual((r2 as { ok: true; bytes: Buffer }).bytes, mock.bytesFor(id2));
 });
+
+test("width/height -> EmptyLatentImage node 5 sized to the request", async () => {
+  const mock = new MockComfy();
+  const result = await generateImage(URL, { prompt: "x", width: 832, height: 1216 }, mock.fetch);
+  assert.equal(result.ok, true);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["5"].class_type, "EmptyLatentImage");
+  assert.equal(graph["5"].inputs.width, 832);
+  assert.equal(graph["5"].inputs.height, 1216);
+});
+
+test("no width/height -> node 5 keeps the workflow default (1024x1024)", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "x" }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["5"].inputs.width, 1024);
+  assert.equal(graph["5"].inputs.height, 1024);
+});

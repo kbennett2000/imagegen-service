@@ -21,6 +21,10 @@ export interface GenerateParams {
   style?: string;
   quality?: Quality;
   seed?: number;
+  // Output dimensions for the EmptyLatentImage node. Omitted => the workflow's default (1024x1024).
+  // The server validates these (positive multiple of 8, sane bounds) before they reach here.
+  width?: number;
+  height?: number;
 }
 
 export type GenerateResult =
@@ -85,6 +89,15 @@ function setNodeSeed(graph: Graph, id: string, seed: number): void {
   if (!node) return;
   if ("noise_seed" in node.inputs) node.inputs.noise_seed = seed; // KSamplerAdvanced (refiner)
   else node.inputs.seed = seed; // KSampler (base)
+}
+
+// Override the EmptyLatentImage output size. Each dimension is set only when the caller supplied
+// it, so an omitted width/height keeps the workflow template's default (1024). No-op if absent.
+function setNodeSize(graph: Graph, id: string, width?: number, height?: number): void {
+  const node = graph[id];
+  if (!node) return;
+  if (width != null) node.inputs.width = width;
+  if (height != null) node.inputs.height = height;
 }
 
 // applyLora — copied exactly. Inject a LoraLoader as node "20" (an unused id in both templates)
@@ -217,6 +230,7 @@ export async function generateImage(
     }
     const seed = params.seed ?? randomSeed();
     for (const id of ["3", "14"]) setNodeSeed(graph, id, seed);
+    setNodeSize(graph, "5", params.width, params.height); // EmptyLatentImage (both workflows)
     if (tier.steps != null && graph["3"] && "steps" in graph["3"].inputs) {
       graph["3"].inputs.steps = tier.steps; // base-sampler step override only
     }

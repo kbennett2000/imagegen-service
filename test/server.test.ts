@@ -335,3 +335,36 @@ test("auth enabled but token unset -> fails closed (401 even with a bearer heade
     await svc.close();
   }
 });
+
+test("POST /generate -> 200 with valid width/height", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", width: 832, height: 1216 }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(mock.submitted[0]!.graph["5"].inputs.width, 832);
+    assert.equal(mock.submitted[0]!.graph["5"].inputs.height, 1216);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> 422 on a non-multiple-of-8 dimension", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", width: 833 }),
+    });
+    assert.equal(res.status, 422);
+    assert.equal(mock.submitted.length, 0); // never reached ComfyUI
+  } finally {
+    await svc.close();
+  }
+});

@@ -86,13 +86,37 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   if (b.seed !== undefined && (typeof b.seed !== "number" || !Number.isFinite(b.seed))) {
     return { error: "`seed` must be a finite number" };
   }
+  for (const name of ["width", "height"] as const) {
+    const err = dimensionError(name, b[name]);
+    if (err) return { error: err };
+  }
 
   const params: GenerateParams = { prompt: b.prompt };
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
   if (typeof b.style === "string") params.style = b.style;
   if (b.quality !== undefined) params.quality = b.quality as Quality;
   if (typeof b.seed === "number") params.seed = b.seed;
+  if (typeof b.width === "number") params.width = b.width;
+  if (typeof b.height === "number") params.height = b.height;
   return { params };
+}
+
+// SDXL latent dimensions must be positive multiples of 8 within a sane range. Returns an error
+// string for a 422, or null when the value is absent (default kept) or valid.
+const MIN_DIMENSION = 256;
+const MAX_DIMENSION = 2048;
+function dimensionError(name: string, value: unknown): string | null {
+  if (value === undefined) return null;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < MIN_DIMENSION ||
+    value > MAX_DIMENSION ||
+    value % 8 !== 0
+  ) {
+    return `\`${name}\` must be an integer multiple of 8 in [${MIN_DIMENSION}, ${MAX_DIMENSION}]`;
+  }
+  return null;
 }
 
 // Constant-time string compare that never throws and is safe for unequal lengths.
