@@ -128,7 +128,9 @@ a warning.)
   "negativePrompt": "extra text",                 // optional; appended to baseline negatives
   "style": "oil painting",                        // optional; see GET /styles
   "quality": "fast | standard | high",            // optional; default "standard"
-  "seed": 12345 }                                 // optional; random if omitted
+  "seed": 12345,                                  // optional; random if omitted
+  "width": 832,                                   // optional; multiple of 8 in [256, 2048]; default 1024
+  "height": 1216 }                                // optional; multiple of 8 in [256, 2048]; default 1024
 ```
 
 - `200 image/png` — raw bytes.
