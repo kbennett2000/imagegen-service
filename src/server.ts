@@ -17,7 +17,9 @@ import {
 } from "./engine.js";
 import { STYLE_LORAS } from "./style-loras.js";
 
-const MAX_BODY_BYTES = 1_000_000; // generous cap for a small JSON body
+// Generous cap. Raised from 1 MB to accommodate base64 reference images (a 1024² portrait PNG is
+// ~1.5 MB raw → ~2 MB base64); a few references still fit comfortably.
+const MAX_BODY_BYTES = 16_000_000;
 
 // The built-in dev/test page, served at GET / and GET /index.html. Read once at module load
 // (resolves next to this file regardless of cwd) so requests serve from memory. Self-contained —
@@ -90,6 +92,24 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
     const err = dimensionError(name, b[name]);
     if (err) return { error: err };
   }
+  if (b.references !== undefined) {
+    if (
+      !Array.isArray(b.references) ||
+      b.references.length > 4 ||
+      !b.references.every((r) => typeof r === "string" && r.length > 0)
+    ) {
+      return { error: "`references` must be an array of up to 4 non-empty base64 strings" };
+    }
+  }
+  if (
+    b.referenceStrength !== undefined &&
+    (typeof b.referenceStrength !== "number" ||
+      !Number.isFinite(b.referenceStrength) ||
+      b.referenceStrength <= 0 ||
+      b.referenceStrength > 1.5)
+  ) {
+    return { error: "`referenceStrength` must be a number in (0, 1.5]" };
+  }
 
   const params: GenerateParams = { prompt: b.prompt };
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
@@ -98,6 +118,10 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   if (typeof b.seed === "number") params.seed = b.seed;
   if (typeof b.width === "number") params.width = b.width;
   if (typeof b.height === "number") params.height = b.height;
+  if (Array.isArray(b.references) && b.references.length) {
+    params.references = b.references as string[];
+  }
+  if (typeof b.referenceStrength === "number") params.referenceStrength = b.referenceStrength;
   return { params };
 }
 

@@ -179,3 +179,60 @@ test("no width/height -> node 5 keeps the workflow default (1024x1024)", async (
   assert.equal(graph["5"].inputs.width, 1024);
   assert.equal(graph["5"].inputs.height, 1024);
 });
+
+// ---- IP-Adapter reference-image (character consistency) --------------------------------------
+
+const REF_B64 = Buffer.from("fake-portrait-png-bytes").toString("base64");
+
+test("references -> IP-Adapter chain injected + reference uploaded", async () => {
+  const mock = new MockComfy();
+  const result = await generateImage(URL, { prompt: "a man in a street", references: [REF_B64] }, mock.fetch);
+  assert.equal(result.ok, true);
+
+  assert.equal(mock.uploads.length, 1); // the reference was uploaded to ComfyUI
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["21"].class_type, "LoadImage");
+  assert.equal(graph["22"].class_type, "IPAdapterModelLoader");
+  assert.equal(graph["22"].inputs.ipadapter_file, "ip-adapter-plus-face_sdxl_vit-h.safetensors");
+  assert.equal(graph["23"].class_type, "CLIPVisionLoader");
+  assert.equal(graph["24"].class_type, "IPAdapterAdvanced");
+  // No LoRA, so the IP-Adapter takes the model straight from the checkpoint; sampler <- IP-Adapter.
+  assert.deepEqual(graph["24"].inputs.model, ["4", 0]);
+  assert.deepEqual(graph["24"].inputs.image, ["21", 0]);
+  assert.deepEqual(graph["3"].inputs.model, ["24", 0]);
+  assert.equal(graph["24"].inputs.weight, 0.55); // tuned default
+});
+
+test("references + style: IP-Adapter chains AFTER the LoRA (model 4 -> 20 -> 24 -> sampler)", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "a man", style: "oil painting", references: [REF_B64] }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.deepEqual(graph["20"].inputs.model, ["4", 0]); // LoRA from checkpoint
+  assert.deepEqual(graph["24"].inputs.model, ["20", 0]); // IP-Adapter from LoRA output
+  assert.deepEqual(graph["3"].inputs.model, ["24", 0]); // sampler from IP-Adapter
+});
+
+test("no references -> no IP-Adapter nodes (unchanged txt2img)", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "a man in a street" }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["24"], undefined);
+  assert.equal(graph["21"], undefined);
+  assert.equal(mock.uploads.length, 0);
+  assert.deepEqual(graph["3"].inputs.model, ["4", 0]);
+});
+
+test("references but IP-Adapter absent on host -> falls back to prompt-only", async () => {
+  const mock = new MockComfy({ ipadapters: [] }); // node/model not installed
+  const result = await generateImage(URL, { prompt: "a man", references: [REF_B64] }, mock.fetch);
+  assert.equal(result.ok, true); // still renders
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["24"], undefined); // no IP-Adapter injected
+  assert.deepEqual(graph["3"].inputs.model, ["4", 0]);
+});
+
+test("referenceStrength overrides the default IP-Adapter weight", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "a man", references: [REF_B64], referenceStrength: 0.8 }, mock.fetch);
+  assert.equal(mock.submitted[0]!.graph["24"].inputs.weight, 0.8);
+});
