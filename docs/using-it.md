@@ -87,7 +87,30 @@ app does this for you every time it needs artwork, quietly, for free, and withou
 to anyone else.
 
 *(Developers: the full request options — quality, negative prompts, seeds, the optional password,
-and the other endpoints — are in the [main project README](../README.md).)*
+and the other endpoints — are in the [developer reference](developer-reference.md).)*
+
+---
+
+## Make a character look consistent
+
+Normally every picture is invented from scratch, so the same prompt can give you a different-looking
+person each time. If you want a character to **keep the same face across different scenes** — say, a
+storybook hero who should look like *themself* on every page — you can hand imagegen-service a
+**reference photo** to guide the resemblance.
+
+![The same character rendered in several different scenes, keeping a consistent face](images/example-reference.svg)
+
+A few honest things to know:
+
+- **It's a resemblance, not a copy.** The result *looks like* the person in your photo; it isn't the
+  exact photo pasted in. Your words still decide the scene, the pose, and the setting.
+- **A clear head-and-shoulders photo works best.** One good face shot is enough.
+- **This is an app feature, not a button on the test page.** The built-in web page doesn't have a
+  photo upload — apps that want consistent characters send the reference along with the request. If
+  you're building one, the [developer reference](developer-reference.md#reference-images-ip-adapter--character-consistency)
+  has the details (`references` and `referenceStrength`).
+- **It's optional.** If your setup doesn't have the extra reference-image files installed, this
+  quietly falls back to a normal picture from your words — nothing breaks.
 
 ---
 

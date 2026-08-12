@@ -11,6 +11,9 @@ import type { FetchFn } from "../../src/engine.ts";
 export interface MockOptions {
   // LoRA files ComfyUI claims it can load (drives loraAvailable / /health). Default: a broad set.
   loras?: string[];
+  // IP-Adapter model files ComfyUI claims it can load (drives ipAdapterAvailable). Default: the
+  // installed face model. Set to [] to simulate the node/model being absent.
+  ipadapters?: string[];
   // Simulate ComfyUI being down: every request rejects (network error).
   down?: boolean;
   // Make POST /prompt fail with this HTTP status (e.g. 400/500). Default: succeeds.
@@ -44,8 +47,11 @@ const DEFAULT_LORAS = [
   "CLAYMATE-v2-sdxl.safetensors",
 ];
 
+const DEFAULT_IPADAPTERS = ["ip-adapter-plus-face_sdxl_vit-h.safetensors"];
+
 export class MockComfy {
   readonly submitted: SubmittedPrompt[] = [];
+  readonly uploads: string[] = []; // filenames POSTed to /upload/image
   private readonly pollCounts = new Map<string, number>();
   private readonly opts: MockOptions;
 
@@ -84,6 +90,21 @@ export class MockComfy {
         return this.jsonResponse(200, {
           LoraLoader: { input: { required: { lora_name: [loras] } } },
         });
+      }
+
+      // GET /object_info/IPAdapterModelLoader — advertises the installed IP-Adapter model files.
+      if (method === "GET" && path.startsWith("/object_info/IPAdapterModelLoader")) {
+        const files = this.opts.ipadapters ?? DEFAULT_IPADAPTERS;
+        return this.jsonResponse(200, {
+          IPAdapterModelLoader: { input: { required: { ipadapter_file: [files] } } },
+        });
+      }
+
+      // POST /upload/image — stores a reference image; returns its filename.
+      if (method === "POST" && path === "/upload/image") {
+        const name = `ref-mock-${this.uploads.length + 1}.png`;
+        this.uploads.push(name);
+        return this.jsonResponse(200, { name, subfolder: "", type: "input" });
       }
 
       // POST /prompt

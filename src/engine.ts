@@ -25,7 +25,20 @@ export interface GenerateParams {
   // The server validates these (positive multiple of 8, sane bounds) before they reach here.
   width?: number;
   height?: number;
+  // Reference images (base64 PNGs) for IP-Adapter character-consistency conditioning. When present,
+  // the engine uploads them to ComfyUI and injects an IP-Adapter apply node so the rendered subject
+  // resembles the reference (a character's portrait). Absent => plain txt2img (unchanged).
+  references?: string[];
+  referenceStrength?: number; // IP-Adapter weight; default REFERENCE_WEIGHT (tuned 0.55).
 }
+
+// IP-Adapter models (installed on the ComfyUI host) + tuned defaults. The face model at weight ~0.55
+// keeps a character's identity (age/face/hair) while letting the text prompt drive the scene — the
+// value validated live against ComfyUI (a bust portrait reference at higher weight collapses every
+// scene into a bust). SDXL base + CLIP-ViT-H image encoder.
+const IPADAPTER_FILE = "ip-adapter-plus-face_sdxl_vit-h.safetensors";
+const CLIP_VISION_FILE = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors";
+const REFERENCE_WEIGHT = 0.55;
 
 export type GenerateResult =
   | { ok: true; bytes: Buffer }
@@ -118,6 +131,39 @@ export function applyLora(graph: Graph, recipe: StyleLora): void {
   if (graph["3"]) graph["3"].inputs.model = ["20", 0]; // sampler <- LoRA model
 }
 
+// applyIPAdapter — inject the IP-Adapter chain so the rendered subject resembles the reference
+// image. Adds LoadImage(21) -> IPAdapterModelLoader(22) + CLIPVisionLoader(23) -> IPAdapterAdvanced(24),
+// taking the model from the current source (the LoRA node "20" if present, else the checkpoint "4")
+// and repointing the base sampler "3" to the IP-Adapter-modified model. Mirrors applyLora's style.
+export function applyIPAdapter(graph: Graph, imageName: string, weight: number): void {
+  const modelSource: [string, number] = graph["20"] ? ["20", 0] : ["4", 0];
+  graph["21"] = { class_type: "LoadImage", inputs: { image: imageName } };
+  graph["22"] = {
+    class_type: "IPAdapterModelLoader",
+    inputs: { ipadapter_file: IPADAPTER_FILE },
+  };
+  graph["23"] = {
+    class_type: "CLIPVisionLoader",
+    inputs: { clip_name: CLIP_VISION_FILE },
+  };
+  graph["24"] = {
+    class_type: "IPAdapterAdvanced",
+    inputs: {
+      model: modelSource,
+      ipadapter: ["22", 0],
+      image: ["21", 0],
+      clip_vision: ["23", 0],
+      weight,
+      weight_type: "linear",
+      combine_embeds: "concat",
+      start_at: 0.0,
+      end_at: 1.0,
+      embeds_scaling: "V only",
+    },
+  };
+  if (graph["3"]) graph["3"].inputs.model = ["24", 0]; // base sampler <- IP-Adapter-modified model
+}
+
 // ---- ComfyUI transport helpers -----------------------------------------------------------
 
 function comfyBase(url: string): string {
@@ -152,6 +198,42 @@ export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[
 async function loraAvailable(base: string, fetchFn: FetchFn, loraFile: string): Promise<boolean> {
   const names = await listLoras(base, fetchFn);
   return names.includes(loraFile);
+}
+
+// Is the IP-Adapter model loaded on the ComfyUI host? (custom node + model must both be present.)
+// Returns false on any error so the engine degrades to prompt-only rather than failing the render.
+async function ipAdapterAvailable(base: string, fetchFn: FetchFn): Promise<boolean> {
+  try {
+    const res = await fetchFn(`${base}/object_info/IPAdapterModelLoader`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) return false;
+    const info = (await res.json().catch(() => ({}))) as Record<string, any>;
+    const files = info?.IPAdapterModelLoader?.input?.required?.ipadapter_file?.[0];
+    return Array.isArray(files) && files.includes(IPADAPTER_FILE);
+  } catch {
+    return false;
+  }
+}
+
+// Upload one base64 PNG to ComfyUI's input/ dir; returns the stored filename for a LoadImage node.
+// A unique name per upload avoids clobbering when requests overlap. Throws on failure (the caller
+// catches and renders prompt-only).
+async function uploadReference(base: string, fetchFn: FetchFn, b64: string): Promise<string> {
+  const bytes = Buffer.from(b64, "base64");
+  const filename = `ref-${randomSeed().toString(16)}.png`;
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/png" }), filename);
+  form.append("overwrite", "true");
+  const res = await fetchFn(`${base}/upload/image`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`ComfyUI /upload/image returned ${res.status}`);
+  const j = (await res.json().catch(() => ({}))) as { name?: string };
+  if (!j.name) throw new Error("ComfyUI /upload/image returned no name");
+  return j.name;
 }
 
 // Health probe: is ComfyUI reachable, and does its /object_info respond? Returns the full list
@@ -214,6 +296,12 @@ export async function generateImage(
       }
     }
 
+    // IP-Adapter needs the base graph's node ids (checkpoint "4", LoRA "20", sampler "3"); the
+    // refiner graph has a different shape. Force base when references are present (like noRefiner).
+    if (params.references?.length && tier.workflow === REFINER_WORKFLOW) {
+      tier = { workflow: BASE_WORKFLOW, steps: 25, timeoutMs: tier.timeoutMs };
+    }
+
     // Fresh graph clone per call — no shared mutable state (concurrency-critical).
     const graph = JSON.parse(
       readFileSync(path.join(WORKFLOWS_DIR, tier.workflow), "utf8"),
@@ -235,6 +323,25 @@ export async function generateImage(
       graph["3"].inputs.steps = tier.steps; // base-sampler step override only
     }
     if (recipe) applyLora(graph, recipe);
+
+    // IP-Adapter block — self-contained so it never taints the outer flow. Falls back to prompt-only
+    // if the model isn't installed on the host or an upload/injection error occurs.
+    const firstReference = params.references?.[0];
+    if (firstReference) {
+      try {
+        if (await ipAdapterAvailable(base, fetchFn)) {
+          const name = await uploadReference(base, fetchFn, firstReference);
+          applyIPAdapter(graph, name, params.referenceStrength ?? REFERENCE_WEIGHT);
+        } else {
+          console.error(
+            "[engine] IP-Adapter not available on ComfyUI host — rendering without reference",
+          );
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error(`[engine] IP-Adapter reference failed (${reason}) — rendering without reference`);
+      }
+    }
 
     // POST /prompt
     const clientId = `imagegen-${randomSeed().toString(16)}`;
