@@ -1,5 +1,4 @@
-<!-- Banner: placeholder for now — see EXAMPLES-TODO.md for the real artwork planned next pass. -->
-![imagegen-service — type a description, get a picture](docs/images/banner.svg)
+![imagegen-service — type a description, get a picture](docs/images/banner.png)
 
 <h1 align="center">imagegen-service</h1>
 
@@ -37,14 +36,14 @@ picture appear — which is perfect for a first play and for testing. See
 
 ## A taste of what it makes
 
-*(Placeholder previews for now — real generated images arrive on the next pass. See
-[the full gallery](docs/gallery.md).)*
+*Every image below was made by the service itself — the same words, in different styles. See
+[the full gallery](docs/gallery.md).*
 
 | | | |
 |:---:|:---:|:---:|
-| ![oil painting example](docs/images/example-oil-painting.svg) | ![watercolour example](docs/images/example-watercolour.svg) | ![comic book example](docs/images/example-comic-book.svg) |
+| ![oil painting example](docs/images/example-oil-painting.png) | ![watercolour example](docs/images/example-watercolour.png) | ![comic book example](docs/images/example-comic-book.png) |
 | **oil painting** | **watercolour** | **comic book** |
-| ![anime example](docs/images/example-anime.svg) | ![cyberpunk example](docs/images/example-cyberpunk.svg) | ![storybook example](docs/images/example-storybook.svg) |
+| ![anime example](docs/images/example-anime.png) | ![cyberpunk example](docs/images/example-cyberpunk.png) | ![storybook example](docs/images/example-storybook.png) |
 | **anime** | **cyberpunk** | **storybook** |
 
 ## What you need (the honest version)
