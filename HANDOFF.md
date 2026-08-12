@@ -1,7 +1,30 @@
 # Handoff
 
 ## Current state
-`POST /generate` now accepts optional **`width`/`height`** (PR open for review): validated in
+**Documentation pass (PR open for review).** Reframed the project docs for a curious, non-technical
+reader while keeping the developer material intact:
+
+- `README.md` rewritten as a **friendly front door** — banner, "what is this", an example grid, an
+  honest "what you need" (incl. a brief **Macs-unsupported** note), a three-step get-started, the
+  12-style table, a **related-projects** table (Chronicle, Scriptorium, text-transform-service,
+  Brickfeed), and a "for developers" pointer. MIT license line added.
+- All the deep API/config/auth/systemd detail moved out of the README into a new
+  **`docs/developer-reference.md`** — and while moving it, the two previously-undocumented pieces
+  were added: the **IP-Adapter reference-image** params (`references`, `referenceStrength`) and the
+  **quality-tier** table (fast/standard/high; LoRA-skips-refiner; references-force-base).
+- `docs/using-it.md` gained a plain-language **"Make a character look consistent"** section for
+  reference images; `docs/README.md` became the docs index (a "where to go next" signpost + the
+  related-projects section). New **`docs/gallery.md`**.
+- **Placeholders:** every example image is a lightweight **SVG placeholder** in `docs/images/`
+  (`banner.svg`, `example-*.svg`) so nothing renders broken; real generated images are a tracked
+  follow-up in **`EXAMPLES-TODO.md`**. The three real test-UI screenshots are kept as-is.
+- Added **`LICENSE`** (MIT). Docs-only — no `src/` changes; `npm run test:unit` untouched.
+- **Note:** this docs branch is based on `add-generate-size`, so it also carries the earlier,
+  never-merged **IP-Adapter** commit (`4219dad`) — merging this PR lands that feature too. Repo
+  description + topics were set on GitHub.
+
+## Prior state — width/height
+`POST /generate` now accepts optional **`width`/`height`** (merged, PR #13): validated in
 `parseGenerateBody` (integer, multiple of 8, in `[256, 2048]`, else 422) and applied to the
 `EmptyLatentImage` node `"5"` in `generateImage` (`setNodeSize`), **defaulting to 1024×1024** when
 omitted — fully backward-compatible. Requested by the scriptorium bakery (its cycle S10a needs
@@ -64,10 +87,12 @@ of Chronicle's local backend — no import of / dependency on Chronicle.
   styled PNG; /health shows reachable + all 12 recipe LoRAs; /styles lists the 12 presets.
 
 ## Next up
-Slices 1 and 2 are complete. No further planned slices.
+Slices 1 and 2 are complete, plus width/height, IP-Adapter reference images, and the docs pass.
 
-Optional future: point Chronicle at this service instead of ComfyUI directly (swap transport,
-keep caption/grounding) — a separate Chronicle-side slice.
+- **Fill in the real example images** — replace the `docs/images/*.svg` placeholders with generated
+  PNGs per `EXAMPLES-TODO.md`, and swap the `.svg` references to `.png` in the markdown.
+- Optional future: point Chronicle at this service instead of ComfyUI directly (swap transport,
+  keep caption/grounding) — a separate Chronicle-side slice.
 
 ## Open questions / blocked
 None.
