@@ -17,6 +17,9 @@ export interface MockOptions {
   // Checkpoint files ComfyUI claims it can load (drives /health checkpoints). Default: the stock
   // SDXL pair.
   checkpoints?: string[];
+  // Upscale models ComfyUI claims it can load (drives /health upscaleModels + the upscale path).
+  // Default: [] (none installed) so the "no upscale model" error path is the default.
+  upscaleModels?: string[];
   // Simulate ComfyUI being down: every request rejects (network error).
   down?: boolean;
   // Make POST /prompt fail with this HTTP status (e.g. 400/500). Default: succeeds.
@@ -104,6 +107,14 @@ export class MockComfy {
         const checkpoints = this.opts.checkpoints ?? DEFAULT_CHECKPOINTS;
         return this.jsonResponse(200, {
           CheckpointLoaderSimple: { input: { required: { ckpt_name: [checkpoints] } } },
+        });
+      }
+
+      // GET /object_info/UpscaleModelLoader — advertises the installed upscale models.
+      if (method === "GET" && path.startsWith("/object_info/UpscaleModelLoader")) {
+        const models = this.opts.upscaleModels ?? [];
+        return this.jsonResponse(200, {
+          UpscaleModelLoader: { input: { required: { model_name: [models] } } },
         });
       }
 

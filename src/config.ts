@@ -10,7 +10,9 @@ export interface Config {
   // `checkpoint` is the default base SDXL checkpoint (as ComfyUI lists it, e.g.
   // "sd_xl_base_1.0.safetensors"). Empty string => keep the workflow template's own default. A
   // per-request `checkpoint` overrides this (ADR-0004).
-  readonly comfyui: { readonly url: string; readonly checkpoint: string };
+  // `upscaleModel` is the default upscale model (as ComfyUI lists it, e.g. "RealESRGAN_x4plus.pth").
+  // Empty string => auto-pick the first installed model when a request asks to upscale (ADR-0006).
+  readonly comfyui: { readonly url: string; readonly checkpoint: string; readonly upscaleModel: string };
   readonly server: { readonly host: string; readonly port: number };
   // Optional shared-token auth (ADR-0002). Disabled by default: fully open on the trusted LAN,
   // matching the open-ComfyUI/Chronicle stance. The token gates /generate + /styles for the
@@ -21,7 +23,7 @@ export interface Config {
 // Last-resort defaults (ADR-0001): host 0.0.0.0 is LAN-exposed BY DESIGN.
 // auth OFF by default (ADR-0002): behavior identical to the open Slice-1 service.
 export const CONFIG_DEFAULTS: Config = {
-  comfyui: { url: "http://localhost:8188", checkpoint: "" },
+  comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "" },
   server: { host: "0.0.0.0", port: 8189 },
   auth: { enabled: false, token: "" },
 };

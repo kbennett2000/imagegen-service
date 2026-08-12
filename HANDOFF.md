@@ -1,6 +1,28 @@
 # Handoff
 
 ## Current state
+**Image upscaling (PR open for review).** Optional `upscale` factor on `POST /generate` enlarges the
+finished image with an ESRGAN-style model as a post-process (ADR-0006).
+
+- **Params**: `upscale` (factor in `(1,4]`) + optional `upscaleModel`. Precedence: request >
+  `config.comfyui.upscaleModel` > first installed model.
+- **Engine** `applyUpscale` inserts `UpscaleModelLoader "40"` → `ImageUpscaleWithModel "41"` (image
+  `["8",0]`), plus `ImageScaleBy "42"` (`scale_by: factor/native`) when the requested factor differs
+  from the model's native factor (parsed from its filename, default 4); repoints `SaveImage "9"`.
+  Runs **last**, so it composes with img2img/LoRA/IP-Adapter/refiner. No model installed → clean
+  **503**. Tier timeout bumped +60s when upscaling. New `listUpscaleModels` probe; `probeComfy`
+  returns `upscaleModels`.
+- **Config**: `comfyui.upscaleModel` (default `""` = auto-pick first). **Server**: validate `upscale`
+  (`(1,4]`) + `upscaleModel` (path-safe) → 422; `/health` reports `upscaleModel` + `upscaleModels`.
+- **UI** ([src/ui.html](src/ui.html)): an Upscale dropdown (Off/2×/4×), enabled only when `/health`
+  lists an upscale model; a model picker appears when >1 is installed.
+- Tests: `npm run test:unit` → **70 pass** (11 new). Mock gained an `upscaleModels` option +
+  `/object_info/UpscaleModelLoader` route. Docs: developer-reference + ADR-0006.
+- **Note:** for live use, an upscale model must sit in `~/comfyui/models/upscale_models/`
+  (RealESRGAN_x4plus.pth was fetched to this box); ComfyUI may need a restart to list a newly-added
+  upscale model. Branched off `master`; content-neutral.
+
+### Prior — image-to-image + UI image inputs (merged, PR #18)
 **Image-to-image + image controls in the UI (PR open for review).** Adds img2img and surfaces the
 existing reference-image feature in the built-in test page (ADR-0005).
 

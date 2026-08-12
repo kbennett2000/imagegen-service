@@ -38,6 +38,11 @@ export interface GenerateParams {
   // present, the engine encodes it into the sampler's latent and lowers `denoise` (ADR-0005).
   initImage?: string;
   denoise?: number; // img2img strength in (0,1]; lower = closer to the input. Default DENOISE_DEFAULT.
+  // Upscaling: when set, the finished image is enlarged by this factor (in (0,4]) with an ESRGAN-style
+  // upscale model as a post-process. `upscaleModel` picks which model (else config default, else the
+  // first installed one). No model installed => the request fails cleanly (ADR-0006).
+  upscale?: number;
+  upscaleModel?: string;
 }
 
 // IP-Adapter models (installed on the ComfyUI host) + tuned defaults. The face model at weight ~0.55
@@ -50,6 +55,9 @@ const REFERENCE_WEIGHT = 0.55;
 // img2img default denoise: keeps the input's composition while letting the prompt substantially
 // repaint it. Lower hews closer to the original; higher drifts toward pure txt2img.
 const DENOISE_DEFAULT = 0.65;
+// Extra wall-clock budget added to the tier timeout when upscaling — a 4× ESRGAN pass on a large
+// plate is quick but not free.
+const UPSCALE_TIMEOUT_BONUS_MS = 60_000;
 
 export type GenerateResult =
   | { ok: true; bytes: Buffer }
@@ -203,6 +211,37 @@ export function applyImg2Img(graph: Graph, imageName: string, denoise: number): 
   }
 }
 
+// An upscale model's native factor, read from its filename (e.g. "4x-UltraSharp" or
+// "RealESRGAN_x4plus" => 4). Defaults to 4 (the common ESRGAN factor) when unparseable.
+export function parseUpscaleFactor(modelName: string): number {
+  const m = modelName.match(/(\d+)\s*x/i) ?? modelName.match(/x\s*(\d+)/i);
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 4;
+}
+
+// applyUpscale — enlarge the FINAL decoded image (node "8") with an ESRGAN-style model, then correct
+// to the exact requested factor. UpscaleModelLoader(40) -> ImageUpscaleWithModel(41) runs the model
+// at its native factor; ImageScaleBy(42) (relative, so it needs no absolute dims — works for img2img
+// too) trims to `factor`. SaveImage "9" is repointed at the result. Runs last, after any img2img /
+// LoRA / IP-Adapter mutation, so it composes with all of them. Ids 40-42 are otherwise unused.
+export function applyUpscale(graph: Graph, modelName: string, factor: number): void {
+  const native = parseUpscaleFactor(modelName);
+  graph["40"] = { class_type: "UpscaleModelLoader", inputs: { model_name: modelName } };
+  graph["41"] = {
+    class_type: "ImageUpscaleWithModel",
+    inputs: { upscale_model: ["40", 0], image: ["8", 0] },
+  };
+  let out: [string, number] = ["41", 0];
+  if (Math.abs(factor - native) > 1e-6) {
+    graph["42"] = {
+      class_type: "ImageScaleBy",
+      inputs: { upscale_method: "lanczos", scale_by: factor / native, image: ["41", 0] },
+    };
+    out = ["42", 0];
+  }
+  if (graph["9"]) graph["9"].inputs.images = out; // SaveImage <- upscaled image
+}
+
 // ---- ComfyUI transport helpers -----------------------------------------------------------
 
 function comfyBase(url: string): string {
@@ -281,25 +320,30 @@ async function uploadImage(base: string, fetchFn: FetchFn, b64: string): Promise
 export async function probeComfy(
   comfyUrl: string,
   fetchFn: FetchFn = fetch,
-): Promise<{ reachable: boolean; loras: string[]; checkpoints: string[] }> {
+): Promise<{ reachable: boolean; loras: string[]; checkpoints: string[]; upscaleModels: string[] }> {
   const base = comfyBase(comfyUrl);
+  const empty = { reachable: false, loras: [], checkpoints: [], upscaleModels: [] };
   try {
     const res = await fetchFn(`${base}/object_info/LoraLoader`, {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!res.ok) return { reachable: false, loras: [], checkpoints: [] };
+    if (!res.ok) return empty;
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
     const names = info?.LoraLoader?.input?.required?.lora_name?.[0];
-    // Reachability is established; the checkpoint list is a best-effort second probe that must not
-    // fail /health if it errors (returns [] then).
-    const checkpoints = await listCheckpoints(base, fetchFn);
+    // Reachability is established; the checkpoint/upscale lists are best-effort second probes that
+    // must not fail /health if they error (return [] then).
+    const [checkpoints, upscaleModels] = await Promise.all([
+      listCheckpoints(base, fetchFn),
+      listUpscaleModels(base, fetchFn),
+    ]);
     return {
       reachable: true,
       loras: Array.isArray(names) ? (names as string[]) : [],
       checkpoints,
+      upscaleModels,
     };
   } catch {
-    return { reachable: false, loras: [], checkpoints: [] };
+    return empty;
   }
 }
 
@@ -312,6 +356,21 @@ export async function listCheckpoints(base: string, fetchFn: FetchFn): Promise<s
     if (!res.ok) return [];
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
     const names = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0];
+    return Array.isArray(names) ? (names as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// The upscale models ComfyUI can load (UpscaleModelLoader.model_name). Returns [] on any failure.
+export async function listUpscaleModels(base: string, fetchFn: FetchFn): Promise<string[]> {
+  try {
+    const res = await fetchFn(`${base}/object_info/UpscaleModelLoader`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) return [];
+    const info = (await res.json().catch(() => ({}))) as Record<string, any>;
+    const names = info?.UpscaleModelLoader?.input?.required?.model_name?.[0];
     return Array.isArray(names) ? (names as string[]) : [];
   } catch {
     return [];
@@ -416,6 +475,21 @@ export async function generateImage(
         const reason = err instanceof Error ? err.message : String(err);
         return { ok: false, error: `img2img upload failed: ${reason}` };
       }
+    }
+
+    // Upscale block — a post-process tail on the final image. Resolve the model (request > config
+    // default (threaded in as params.upscaleModel) > first installed) and fail cleanly if none is
+    // installed, since the caller explicitly asked to upscale.
+    if (params.upscale) {
+      const model = params.upscaleModel || (await listUpscaleModels(base, fetchFn))[0];
+      if (!model) {
+        return {
+          ok: false,
+          error: "no upscale model installed on the ComfyUI host (add one to models/upscale_models/)",
+        };
+      }
+      applyUpscale(graph, model, params.upscale);
+      tier = { ...tier, timeoutMs: tier.timeoutMs + UPSCALE_TIMEOUT_BONUS_MS };
     }
 
     // POST /prompt
