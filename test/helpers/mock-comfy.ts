@@ -21,6 +21,8 @@ export interface MockOptions {
   down?: boolean;
   // Make POST /prompt fail with this HTTP status (e.g. 400/500). Default: succeeds.
   promptStatus?: number;
+  // Make POST /upload/image fail with this HTTP status (drives the img2img upload-failure path).
+  uploadStatus?: number;
   // Number of history polls before a given prompt_id reports its image ready. Default: 0
   // (ready on the very first poll). Keyed by the 1-based submission order.
   readyAfterPolls?: (submissionIndex: number) => number;
@@ -115,6 +117,9 @@ export class MockComfy {
 
       // POST /upload/image — stores a reference image; returns its filename.
       if (method === "POST" && path === "/upload/image") {
+        if (this.opts.uploadStatus && this.opts.uploadStatus >= 400) {
+          return new Response("upload rejected", { status: this.opts.uploadStatus });
+        }
         const name = `ref-mock-${this.uploads.length + 1}.png`;
         this.uploads.push(name);
         return this.jsonResponse(200, { name, subfolder: "", type: "input" });

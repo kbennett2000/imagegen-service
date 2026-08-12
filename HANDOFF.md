@@ -1,6 +1,25 @@
 # Handoff
 
 ## Current state
+**Image-to-image + image controls in the UI (PR open for review).** Adds img2img and surfaces the
+existing reference-image feature in the built-in test page (ADR-0005).
+
+- **img2img**: optional `initImage` (base64 PNG) + `denoise` (`(0,1]`, default 0.65) on
+  `POST /generate`. Engine `applyImg2Img` injects `LoadImage("30") → VAEEncode("31")` (reusing
+  `VAELoader "10"`) and repoints base sampler `"3"` `latent_image`/`denoise`. Forces the base
+  workflow at `quality:"high"` (like `references`); composes with style/checkpoint/negatives. Output
+  size follows the input image (`width`/`height` ignored). Upload failure → clean **503** (does NOT
+  silently fall back to txt2img). The base64 uploader `uploadReference` was renamed **`uploadImage`**.
+- **Server**: `parseGenerateBody` validates `initImage` (non-empty) + `denoise` (`(0,1]`) → 422.
+- **UI** ([src/ui.html](src/ui.html)): a "Starting image" (img2img) picker + "Change amount"
+  (denoise) slider, and a "Reference photo" picker + "Likeness strength" slider (surfacing the
+  pre-existing `references`/`referenceStrength` params). Images are downscaled client-side to ≤1024px
+  before upload.
+- Tests: `npm run test:unit` → **59 pass** (9 new). Mock gained an `uploadStatus` option for the
+  upload-failure path. Docs: [docs/developer-reference.md](docs/developer-reference.md) + ADR-0005.
+- Branched off `master`; content-neutral.
+
+### Prior — selectable base checkpoint + UI (merged, PRs #16/#17)
 **Selectable base checkpoint (PR open for review).** The SDXL base checkpoint is no longer hardcoded
 to `sd_xl_base_1.0.safetensors`; it's now selectable (ADR-0004), fully backward-compatible.
 

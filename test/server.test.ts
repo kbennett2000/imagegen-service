@@ -463,3 +463,64 @@ test("GET /health -> effective checkpoint falls back to the stock default when u
     await svc.close();
   }
 });
+
+// ---- img2img (initImage / denoise) ----
+
+const INIT_B64 = Buffer.from("fake-starting-image-png").toString("base64");
+
+test("POST /generate -> img2img: initImage + denoise wire the img2img graph", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a castle", initImage: INIT_B64, denoise: 0.5 }),
+    });
+    assert.equal(res.status, 200);
+    const graph = mock.submitted[0]!.graph;
+    assert.equal(graph["30"].class_type, "LoadImage");
+    assert.equal(graph["31"].class_type, "VAEEncode");
+    assert.deepEqual(graph["3"].inputs.latent_image, ["31", 0]);
+    assert.equal(graph["3"].inputs.denoise, 0.5);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> 422 on denoise out of range", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    for (const denoise of [0, 1.5]) {
+      const res = await fetch(`${svc.base}/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "x", initImage: INIT_B64, denoise }),
+      });
+      assert.equal(res.status, 422);
+      const body = (await res.json()) as any;
+      assert.match(body.error, /denoise/);
+    }
+    assert.equal(mock.submitted.length, 0);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> 422 on empty initImage", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", initImage: "" }),
+    });
+    assert.equal(res.status, 422);
+    const body = (await res.json()) as any;
+    assert.match(body.error, /initImage/);
+  } finally {
+    await svc.close();
+  }
+});

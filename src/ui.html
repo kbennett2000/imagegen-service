@@ -57,6 +57,13 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .placeholder { color: #9ca3af; font-size: .85rem; border: 1px dashed #d1d5db;
       border-radius: .35rem; padding: 2rem 1rem; text-align: center; }
+    .thumb { max-width: 120px; max-height: 120px; border-radius: .35rem;
+      border: 1px solid #9ca3af; display: block; margin: .4rem 0; }
+    .linkbtn { width: auto; margin: 0 0 .3rem; padding: .1rem .45rem; font-size: .75rem;
+      background: transparent; color: #2563eb; border: 1px solid #9ca3af; }
+    input[type=range] { padding: 0; }
+    .imgblock { border: 1px solid #e5e7eb; border-radius: .4rem; padding: .5rem .7rem; margin-top: .5rem; }
+    .imgblock > label:first-child { margin-top: 0; }
   </style>
 </head>
 <body>
@@ -113,6 +120,38 @@
         896×1152 (portrait), 1152×896 (landscape), 832×1216. Much bigger can duplicate/warp.
       </p>
 
+      <div class="imgblock">
+        <label for="initImageFile">Starting image <span class="hint">(optional — img2img)</span></label>
+        <p class="hint" style="margin:.1rem 0 .3rem">
+          Use your image as the canvas and repaint it toward the prompt.
+        </p>
+        <input id="initImageFile" type="file" accept="image/*" />
+        <div id="initImageWrap" hidden>
+          <img id="initImageThumb" class="thumb" alt="starting image" />
+          <button type="button" id="initImageClear" class="linkbtn">remove starting image</button>
+          <label for="denoise">Change amount: <span id="denoiseVal">0.65</span>
+            <span class="hint">(low = keep it close, high = transform a lot)</span></label>
+          <input id="denoise" type="range" min="0.2" max="0.9" step="0.05" value="0.65" />
+          <p class="hint" style="margin:.3rem 0 0">Width/Height are ignored — output matches this image's size.</p>
+        </div>
+      </div>
+
+      <div class="imgblock">
+        <label for="refImageFile">Reference photo <span class="hint">(optional — keep a face/character)</span></label>
+        <p class="hint" style="margin:.1rem 0 .3rem">
+          Generate a <em>new</em> scene from the prompt while keeping this face/character's likeness
+          (needs IP-Adapter installed). Different from a starting image.
+        </p>
+        <input id="refImageFile" type="file" accept="image/*" />
+        <div id="refImageWrap" hidden>
+          <img id="refImageThumb" class="thumb" alt="reference photo" />
+          <button type="button" id="refImageClear" class="linkbtn">remove reference photo</button>
+          <label for="refStrength">Likeness strength: <span id="refStrengthVal">0.55</span>
+            <span class="hint">(higher = stronger resemblance)</span></label>
+          <input id="refStrength" type="range" min="0.2" max="1.2" step="0.05" value="0.55" />
+        </div>
+      </div>
+
       <label for="token">Auth token <span class="hint">(only if auth is enabled)</span></label>
       <input id="token" type="text" placeholder="Bearer token — leave blank on open LAN" autocomplete="off" />
 
@@ -136,6 +175,51 @@
     const checkpointSel = $("checkpoint");
     let defaultCheckpoint = "";
     let currentObjectUrl = null;
+    let initImageB64 = null; // img2img starting image
+    let refImageB64 = null;  // IP-Adapter reference photo
+
+    // Read a chosen file, downscale to <=1024px on the long edge (keeps SDXL happy + the request
+    // small), and return { b64, dataUrl }. b64 is the bare base64 PNG the API expects.
+    function readScaledPng(file, maxEdge = 1024) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onerror = () => reject(new Error("could not read file"));
+        fr.onload = () => {
+          const im = new Image();
+          im.onerror = () => reject(new Error("not an image"));
+          im.onload = () => {
+            let { width: w, height: h } = im;
+            const scale = Math.min(1, maxEdge / Math.max(w, h));
+            w = Math.max(8, Math.round((w * scale) / 8) * 8);
+            h = Math.max(8, Math.round((h * scale) / 8) * 8);
+            const cv = document.createElement("canvas");
+            cv.width = w; cv.height = h;
+            cv.getContext("2d").drawImage(im, 0, 0, w, h);
+            const dataUrl = cv.toDataURL("image/png");
+            resolve({ b64: dataUrl.split(",")[1], dataUrl });
+          };
+          im.src = fr.result;
+        };
+        fr.readAsDataURL(file);
+      });
+    }
+
+    // Wire a file input <-> thumbnail/clear pair; onSet(b64) stores it, returns a reset fn.
+    function wireImagePicker(fileId, wrapId, thumbId, clearId, onSet) {
+      const reset = () => { onSet(null); $(wrapId).hidden = true; $(fileId).value = ""; };
+      $(fileId).addEventListener("change", async () => {
+        const file = $(fileId).files[0];
+        if (!file) { reset(); return; }
+        try {
+          const { b64, dataUrl } = await readScaledPng(file);
+          onSet(b64);
+          $(thumbId).src = dataUrl;
+          $(wrapId).hidden = false;
+        } catch (e) { showError("Could not load image: " + e.message); reset(); }
+      });
+      $(clearId).addEventListener("click", reset);
+      return reset;
+    }
 
     // Build headers, adding the bearer token only when one is entered.
     function authHeaders(extra) {
@@ -235,6 +319,14 @@
     // Re-fetch styles when a token is typed/pasted, so the dropdown fills once authorized.
     $("token").addEventListener("change", loadStyles);
 
+    // Image pickers (img2img starting image + IP-Adapter reference photo) and their sliders.
+    wireImagePicker("initImageFile", "initImageWrap", "initImageThumb", "initImageClear",
+      (b64) => { initImageB64 = b64; });
+    wireImagePicker("refImageFile", "refImageWrap", "refImageThumb", "refImageClear",
+      (b64) => { refImageB64 = b64; });
+    $("denoise").addEventListener("input", () => { $("denoiseVal").textContent = $("denoise").value; });
+    $("refStrength").addEventListener("input", () => { $("refStrengthVal").textContent = $("refStrength").value; });
+
     $("form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       clearError();
@@ -257,6 +349,14 @@
       if (wRaw !== "") body.width = Number(wRaw);
       const hRaw = $("height").value.trim();
       if (hRaw !== "") body.height = Number(hRaw);
+      if (initImageB64) {
+        body.initImage = initImageB64;
+        body.denoise = Number($("denoise").value);
+      }
+      if (refImageB64) {
+        body.references = [refImageB64];
+        body.referenceStrength = Number($("refStrength").value);
+      }
 
       const go = $("go");
       go.disabled = true;
