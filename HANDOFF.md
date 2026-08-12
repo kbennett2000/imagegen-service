@@ -1,7 +1,29 @@
 # Handoff
 
 ## Current state
-**Image upscaling (PR open for review).** Optional `upscale` factor on `POST /generate` enlarges the
+**IP-Adapter conditions identity, not composition (ADR-0007, PR open for review).** `applyIPAdapter` injected the
+reference across the *entire* denoising schedule (`start_at: 0.0`) and fed `plus-face` an
+**uncropped** bust. Both are wrong for a face adapter, and a downstream caller found out expensively:
+one of its character portraits happened to render as two men in uniform against red curtains, and
+**84 illustrations came back as near-copies of it** — same figures, same uniforms, same curtains —
+no matter what their prompts asked for. The early high-noise steps decide layout and *figure count*;
+letting the adapter own them meant it dictated composition, not just likeness.
+
+- **`start_at` now defaults to `0.30`**, so composition belongs to the text prompt and identity
+  lands afterwards. The old mitigation for this exact symptom was a lowered `weight` (the code
+  comment read *"a bust portrait reference at higher weight collapses every scene into a bust"*) —
+  the right observation, the wrong dial.
+- **Head-crops the reference** via `PrepImageForClipVision` (`crop_position: "top"`) as graph node
+  **25**, between `LoadImage` (21) and `IPAdapterAdvanced` (24). Probed with a generalised
+  `nodeAvailable()`; a host without it conditions on the raw reference and still renders.
+- `weight_type` `"linear"` → **`"ease in-out"`**; default `weight` 0.55 → **0.5**.
+- New optional request field **`referenceStart`**, validated to `[0, 0.5]` (422 outside), beside the
+  existing `referenceStrength`. File-config/request-driven only — still no env vars.
+- `npm run test:unit`: **76 passing**, CI-safe. `MockComfy` gained a `nodes` option so both the
+  crop-present and crop-absent paths are covered.
+
+### Prior — image upscaling (merged, PR #19)
+**Image upscaling (merged, PR #19).** Optional `upscale` factor on `POST /generate` enlarges the
 finished image with an ESRGAN-style model as a post-process (ADR-0006).
 
 - **Params**: `upscale` (factor in `(1,4]`) + optional `upscaleModel`. Precedence: request >
@@ -20,30 +42,16 @@ finished image with an ESRGAN-style model as a post-process (ADR-0006).
   `/object_info/UpscaleModelLoader` route. Docs: developer-reference + ADR-0006.
 - **Note:** for live use, an upscale model must sit in `~/comfyui/models/upscale_models/`
   (RealESRGAN_x4plus.pth was fetched to this box); ComfyUI may need a restart to list a newly-added
-  upscale model. Branched off `master`; content-neutral.
+  upscale model.
 
-### Prior — image-to-image + UI image inputs (merged, PR #18)
-**Image-to-image + image controls in the UI (PR open for review).** Adds img2img and surfaces the
-existing reference-image feature in the built-in test page (ADR-0005).
-
-- **img2img**: optional `initImage` (base64 PNG) + `denoise` (`(0,1]`, default 0.65) on
-  `POST /generate`. Engine `applyImg2Img` injects `LoadImage("30") → VAEEncode("31")` (reusing
-  `VAELoader "10"`) and repoints base sampler `"3"` `latent_image`/`denoise`. Forces the base
-  workflow at `quality:"high"` (like `references`); composes with style/checkpoint/negatives. Output
-  size follows the input image (`width`/`height` ignored). Upload failure → clean **503** (does NOT
-  silently fall back to txt2img). The base64 uploader `uploadReference` was renamed **`uploadImage`**.
-- **Server**: `parseGenerateBody` validates `initImage` (non-empty) + `denoise` (`(0,1]`) → 422.
-- **UI** ([src/ui.html](src/ui.html)): a "Starting image" (img2img) picker + "Change amount"
-  (denoise) slider, and a "Reference photo" picker + "Likeness strength" slider (surfacing the
-  pre-existing `references`/`referenceStrength` params). Images are downscaled client-side to ≤1024px
-  before upload.
-- Tests: `npm run test:unit` → **59 pass** (9 new). Mock gained an `uploadStatus` option for the
-  upload-failure path. Docs: [docs/developer-reference.md](docs/developer-reference.md) + ADR-0005.
-- Branched off `master`; content-neutral.
+### Prior — image-to-image (merged, PR #18)
+Optional `initImage` + `denoise` on `POST /generate` (ADR-0005), with matching test-UI controls.
+Independent of the `referenceStart` work above — one seeds the sampler's latent, the other schedules
+identity conditioning — and they compose.
 
 ### Prior — selectable base checkpoint + UI (merged, PRs #16/#17)
-**Selectable base checkpoint (PR open for review).** The SDXL base checkpoint is no longer hardcoded
-to `sd_xl_base_1.0.safetensors`; it's now selectable (ADR-0004), fully backward-compatible.
+The SDXL base checkpoint is no longer hardcoded to `sd_xl_base_1.0.safetensors`; it is selectable
+(ADR-0004), fully backward-compatible.
 
 - **Config** `comfyui.checkpoint` (default `""` = keep the workflow templates' checkpoint) in
   [src/config.ts](src/config.ts) + [config.example.json](config.example.json).
@@ -58,8 +66,8 @@ to `sd_xl_base_1.0.safetensors`; it's now selectable (ADR-0004), fully backward-
   + LoRA-compose; server config-default/request-override/422/health). Mock gained a `checkpoints`
   option + a `/object_info/CheckpointLoaderSimple` route.
 - Docs: [docs/developer-reference.md](docs/developer-reference.md) (config field, `POST /generate`
-  param, /health fields, test-UI note), ADR-0004. Branched off `master`; unrelated to the
-  IP-Adapter `referenceStart` work in progress on another branch.
+  param, /health fields, test-UI note), ADR-0004. Branched off `master`; the IP-Adapter `referenceStart`
+  work above landed after it and was rebased on top (its ADR renumbered 0004 -> 0006).
 
 ### Prior — real sample images (merged, PR #15)
 Follow-up to the merged documentation pass (PR #14): the SVG placeholders were replaced with
@@ -144,13 +152,22 @@ of Chronicle's local backend — no import of / dependency on Chronicle.
   port 8189, comfyui http://localhost:8188.
 - Two resolved API choices (not pinned by the ADR): caller `negativePrompt` is *appended* to the
   workflow's baseline negatives; when `seed` is omitted a random 32-bit seed is used.
-- Tests: `npm run test:unit` — 22 passing, CI-safe (mocked ComfyUI, no GPU), including the
+- Tests: `npm run test:unit` — 55 passing, CI-safe (mocked ComfyUI, no GPU), including the
   critical concurrency test (poll-by-own-prompt_id, no cross-delivery).
 - Verified live on this box against real ComfyUI 0.27.0: /generate returned a real 1024×1024
   styled PNG; /health shows reachable + all 12 recipe LoRAs; /styles lists the 12 presets.
 
 ## Next up
-Slices 1 and 2 are complete, plus width/height, IP-Adapter reference images, and the docs pass.
+Slices 1 and 2 are complete, plus width/height, IP-Adapter reference images, the docs pass, and
+ADR-0006 (identity-only conditioning).
+
+- **`docs/developer-reference.md` documents `references`/`referenceStrength` but not
+  `referenceStart`** — add it, and refresh the stated `weight` default (0.55 → 0.5).
+- **Multi-identity conditioning is still unsolved.** `references` accepts up to 4 images but only
+  the first is used, applied globally with no attention mask, so a two-person frame gives both
+  people the reference's face. Needs regional/masked conditioning; the caller would supply regions.
+- The character-consistency montage in `docs/images/` was generated under the old `start_at: 0.0`
+  behaviour — regenerate it (`python3 tools/generate-sample-images.py`) against a live service.
 
 - Sample images are done. To refresh them (e.g. after adding a style), re-run
   `python3 tools/generate-sample-images.py` against a live service.
