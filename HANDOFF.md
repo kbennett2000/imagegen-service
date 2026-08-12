@@ -1,6 +1,26 @@
 # Handoff
 
 ## Current state
+**Selectable base checkpoint (PR open for review).** The SDXL base checkpoint is no longer hardcoded
+to `sd_xl_base_1.0.safetensors`; it's now selectable (ADR-0004), fully backward-compatible.
+
+- **Config** `comfyui.checkpoint` (default `""` = keep the workflow templates' checkpoint) in
+  [src/config.ts](src/config.ts) + [config.example.json](config.example.json).
+- **Per-request** optional `checkpoint` on `POST /generate`, validated in `parseGenerateBody`
+  (non-empty, ≤200 chars, no path traversal → 422). Precedence: **request > config > template**.
+- **Engine** `setNodeCheckpoint` overrides base node `"4"` on the cloned graph (both workflows);
+  composes with the LoRA (node `"20"`) and IP-Adapter chains. The **refiner** checkpoint (node
+  `"11"`) is left stock. Unknown name → ComfyUI `node_errors` → existing clean 503 (no pre-flight).
+- **/health** now returns `checkpoint` (effective default) + `checkpoints` (installed list, via a
+  new `listCheckpoints` probe). `src/ui.html` gained a **Model dropdown** populated from it.
+- Tests: `npm run test:unit` → **50 pass** (10 new: engine node-"4" override incl. refiner-untouched
+  + LoRA-compose; server config-default/request-override/422/health). Mock gained a `checkpoints`
+  option + a `/object_info/CheckpointLoaderSimple` route.
+- Docs: [docs/developer-reference.md](docs/developer-reference.md) (config field, `POST /generate`
+  param, /health fields, test-UI note), ADR-0004. Branched off `master`; unrelated to the
+  IP-Adapter `referenceStart` work in progress on another branch.
+
+### Prior — documentation pass
 **Documentation pass (PR open for review).** Reframed the project docs for a curious, non-technical
 reader while keeping the developer material intact:
 

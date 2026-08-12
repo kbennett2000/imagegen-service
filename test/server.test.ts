@@ -7,7 +7,7 @@ import { createServer } from "../src/server.ts";
 import { MockComfy } from "./helpers/mock-comfy.ts";
 
 const CONFIG: Config = {
-  comfyui: { url: "http://localhost:8188" },
+  comfyui: { url: "http://localhost:8188", checkpoint: "" },
   server: { host: "127.0.0.1", port: 0 },
   auth: { enabled: false, token: "" },
 };
@@ -166,7 +166,7 @@ test("unknown route -> 404 JSON", async () => {
 // ---- Optional shared-token auth (ADR-0002) ----
 
 const AUTH_CONFIG: Config = {
-  comfyui: { url: "http://localhost:8188" },
+  comfyui: { url: "http://localhost:8188", checkpoint: "" },
   server: { host: "127.0.0.1", port: 0 },
   auth: { enabled: true, token: "s3cret-token" },
 };
@@ -318,7 +318,7 @@ test("auth enabled -> /health stays open with no token", async () => {
 test("auth enabled but token unset -> fails closed (401 even with a bearer header)", async () => {
   const mock = new MockComfy();
   const misconfigured: Config = {
-    comfyui: { url: "http://localhost:8188" },
+    comfyui: { url: "http://localhost:8188", checkpoint: "" },
     server: { host: "127.0.0.1", port: 0 },
     auth: { enabled: true, token: "" },
   };
@@ -364,6 +364,101 @@ test("POST /generate -> 422 on a non-multiple-of-8 dimension", async () => {
     });
     assert.equal(res.status, 422);
     assert.equal(mock.submitted.length, 0); // never reached ComfyUI
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> config default checkpoint applied when the request omits one", async () => {
+  const mock = new MockComfy();
+  const config: Config = {
+    comfyui: { url: "http://localhost:8188", checkpoint: "juggernautXL_ragnarok.safetensors" },
+    server: { host: "127.0.0.1", port: 0 },
+    auth: { enabled: false, token: "" },
+  };
+  const svc = await startService(mock, config);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x" }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, "juggernautXL_ragnarok.safetensors");
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> request checkpoint overrides the config default", async () => {
+  const mock = new MockComfy();
+  const config: Config = {
+    comfyui: { url: "http://localhost:8188", checkpoint: "config_default.safetensors" },
+    server: { host: "127.0.0.1", port: 0 },
+    auth: { enabled: false, token: "" },
+  };
+  const svc = await startService(mock, config);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", checkpoint: "request_pick.safetensors" }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, "request_pick.safetensors");
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> 422 on a checkpoint with path traversal", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", checkpoint: "../../etc/passwd" }),
+    });
+    assert.equal(res.status, 422);
+    const body = (await res.json()) as any;
+    assert.match(body.error, /checkpoint/);
+    assert.equal(mock.submitted.length, 0); // never reached ComfyUI
+  } finally {
+    await svc.close();
+  }
+});
+
+test("GET /health -> reports the effective checkpoint and installed checkpoint list", async () => {
+  const mock = new MockComfy({
+    checkpoints: ["sd_xl_base_1.0.safetensors", "juggernautXL_ragnarok.safetensors"],
+  });
+  const config: Config = {
+    comfyui: { url: "http://localhost:8188", checkpoint: "juggernautXL_ragnarok.safetensors" },
+    server: { host: "127.0.0.1", port: 0 },
+    auth: { enabled: false, token: "" },
+  };
+  const svc = await startService(mock, config);
+  try {
+    const res = await fetch(`${svc.base}/health`);
+    const body = (await res.json()) as any;
+    assert.equal(body.checkpoint, "juggernautXL_ragnarok.safetensors"); // config override is effective
+    assert.deepEqual(
+      body.checkpoints.sort(),
+      ["juggernautXL_ragnarok.safetensors", "sd_xl_base_1.0.safetensors"],
+    );
+  } finally {
+    await svc.close();
+  }
+});
+
+test("GET /health -> effective checkpoint falls back to the stock default when unset", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock); // CONFIG has checkpoint: ""
+  try {
+    const res = await fetch(`${svc.base}/health`);
+    const body = (await res.json()) as any;
+    assert.equal(body.checkpoint, "sd_xl_base_1.0.safetensors");
   } finally {
     await svc.close();
   }

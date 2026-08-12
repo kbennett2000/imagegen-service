@@ -1,6 +1,7 @@
 {
   "comfyui": {
-    "url": "http://localhost:8188"
+    "url": "http://localhost:8188",
+    "checkpoint": ""
   },
   "server": {
     "host": "0.0.0.0",

@@ -14,6 +14,9 @@ export interface MockOptions {
   // IP-Adapter model files ComfyUI claims it can load (drives ipAdapterAvailable). Default: the
   // installed face model. Set to [] to simulate the node/model being absent.
   ipadapters?: string[];
+  // Checkpoint files ComfyUI claims it can load (drives /health checkpoints). Default: the stock
+  // SDXL pair.
+  checkpoints?: string[];
   // Simulate ComfyUI being down: every request rejects (network error).
   down?: boolean;
   // Make POST /prompt fail with this HTTP status (e.g. 400/500). Default: succeeds.
@@ -48,6 +51,8 @@ const DEFAULT_LORAS = [
 ];
 
 const DEFAULT_IPADAPTERS = ["ip-adapter-plus-face_sdxl_vit-h.safetensors"];
+
+const DEFAULT_CHECKPOINTS = ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"];
 
 export class MockComfy {
   readonly submitted: SubmittedPrompt[] = [];
@@ -89,6 +94,14 @@ export class MockComfy {
         const loras = this.opts.loras ?? DEFAULT_LORAS;
         return this.jsonResponse(200, {
           LoraLoader: { input: { required: { lora_name: [loras] } } },
+        });
+      }
+
+      // GET /object_info/CheckpointLoaderSimple — advertises the installed checkpoint files.
+      if (method === "GET" && path.startsWith("/object_info/CheckpointLoaderSimple")) {
+        const checkpoints = this.opts.checkpoints ?? DEFAULT_CHECKPOINTS;
+        return this.jsonResponse(200, {
+          CheckpointLoaderSimple: { input: { required: { ckpt_name: [checkpoints] } } },
         });
       }
 

@@ -25,6 +25,9 @@ export interface GenerateParams {
   // The server validates these (positive multiple of 8, sane bounds) before they reach here.
   width?: number;
   height?: number;
+  // Base checkpoint override (ComfyUI ckpt_name, e.g. "sd_xl_base_1.0.safetensors"). Omitted =>
+  // the workflow template's own checkpoint. Applied to node "4" of both workflows (ADR-0004).
+  checkpoint?: string;
   // Reference images (base64 PNGs) for IP-Adapter character-consistency conditioning. When present,
   // the engine uploads them to ComfyUI and injects an IP-Adapter apply node so the rendered subject
   // resembles the reference (a character's portrait). Absent => plain txt2img (unchanged).
@@ -47,6 +50,11 @@ export type GenerateResult =
 const WORKFLOWS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "workflows");
 const BASE_WORKFLOW = "sdxl-txt2img.json";
 const REFINER_WORKFLOW = "sdxl-refiner.json";
+
+// The checkpoint baked into the workflow templates (node "4"). Used only to report the effective
+// checkpoint on /health when no override is configured; the actual render always reads the value
+// from the template unless overridden. Keep in sync with the workflows' ckpt_name.
+export const DEFAULT_CHECKPOINT = "sd_xl_base_1.0.safetensors";
 
 const POLL_INTERVAL_MS = 500; // between /history polls
 const REQUEST_TIMEOUT_MS = 30_000; // per individual HTTP request
@@ -111,6 +119,15 @@ function setNodeSize(graph: Graph, id: string, width?: number, height?: number):
   if (!node) return;
   if (width != null) node.inputs.width = width;
   if (height != null) node.inputs.height = height;
+}
+
+// Override a CheckpointLoaderSimple's ckpt_name. Applied to the base checkpoint node "4"; a set but
+// unknown name is caught downstream by ComfyUI (node_errors -> a clean 503). No-op if the node is
+// absent or no name was supplied (keeps the template's default).
+function setNodeCheckpoint(graph: Graph, id: string, name?: string): void {
+  const node = graph[id];
+  if (!node || !name) return;
+  node.inputs.ckpt_name = name;
 }
 
 // applyLora — copied exactly. Inject a LoraLoader as node "20" (an unused id in both templates)
@@ -242,18 +259,40 @@ async function uploadReference(base: string, fetchFn: FetchFn, b64: string): Pro
 export async function probeComfy(
   comfyUrl: string,
   fetchFn: FetchFn = fetch,
-): Promise<{ reachable: boolean; loras: string[] }> {
+): Promise<{ reachable: boolean; loras: string[]; checkpoints: string[] }> {
   const base = comfyBase(comfyUrl);
   try {
     const res = await fetchFn(`${base}/object_info/LoraLoader`, {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!res.ok) return { reachable: false, loras: [] };
+    if (!res.ok) return { reachable: false, loras: [], checkpoints: [] };
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
     const names = info?.LoraLoader?.input?.required?.lora_name?.[0];
-    return { reachable: true, loras: Array.isArray(names) ? (names as string[]) : [] };
+    // Reachability is established; the checkpoint list is a best-effort second probe that must not
+    // fail /health if it errors (returns [] then).
+    const checkpoints = await listCheckpoints(base, fetchFn);
+    return {
+      reachable: true,
+      loras: Array.isArray(names) ? (names as string[]) : [],
+      checkpoints,
+    };
   } catch {
-    return { reachable: false, loras: [] };
+    return { reachable: false, loras: [], checkpoints: [] };
+  }
+}
+
+// The checkpoints ComfyUI can load (CheckpointLoaderSimple.ckpt_name). Returns [] on any failure.
+export async function listCheckpoints(base: string, fetchFn: FetchFn): Promise<string[]> {
+  try {
+    const res = await fetchFn(`${base}/object_info/CheckpointLoaderSimple`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) return [];
+    const info = (await res.json().catch(() => ({}))) as Record<string, any>;
+    const names = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0];
+    return Array.isArray(names) ? (names as string[]) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -319,6 +358,7 @@ export async function generateImage(
     const seed = params.seed ?? randomSeed();
     for (const id of ["3", "14"]) setNodeSeed(graph, id, seed);
     setNodeSize(graph, "5", params.width, params.height); // EmptyLatentImage (both workflows)
+    setNodeCheckpoint(graph, "4", params.checkpoint); // base checkpoint override (both workflows)
     if (tier.steps != null && graph["3"] && "steps" in graph["3"].inputs) {
       graph["3"].inputs.steps = tier.steps; // base-sampler step override only
     }
