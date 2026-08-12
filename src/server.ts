@@ -115,6 +115,18 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   ) {
     return { error: "`referenceStrength` must be a number in (0, 1.5]" };
   }
+  if (b.initImage !== undefined && (typeof b.initImage !== "string" || b.initImage === "")) {
+    return { error: "`initImage` must be a non-empty base64 PNG string" };
+  }
+  if (
+    b.denoise !== undefined &&
+    (typeof b.denoise !== "number" ||
+      !Number.isFinite(b.denoise) ||
+      b.denoise <= 0 ||
+      b.denoise > 1)
+  ) {
+    return { error: "`denoise` must be a number in (0, 1]" };
+  }
 
   const params: GenerateParams = { prompt: b.prompt };
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
@@ -128,6 +140,8 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   }
   if (typeof b.referenceStrength === "number") params.referenceStrength = b.referenceStrength;
   if (typeof b.checkpoint === "string") params.checkpoint = b.checkpoint.trim();
+  if (typeof b.initImage === "string" && b.initImage !== "") params.initImage = b.initImage;
+  if (typeof b.denoise === "number") params.denoise = b.denoise;
   return { params };
 }
 

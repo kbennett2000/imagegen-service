@@ -267,3 +267,65 @@ test("checkpoint override composes with a LoRA style (node 20 still reads from n
   assert.equal(graph["20"].class_type, "LoraLoader");
   assert.deepEqual(graph["20"].inputs.model, ["4", 0]); // LoRA still draws from the (overridden) checkpoint
 });
+
+// ---- img2img (initImage / denoise) ----
+
+test("img2img: initImage encodes to latent and repoints the sampler with lowered denoise", async () => {
+  const mock = new MockComfy();
+  const result = await generateImage(URL, { prompt: "a castle", initImage: REF_B64, denoise: 0.6 }, mock.fetch);
+  assert.equal(result.ok, true);
+  assert.equal(mock.uploads.length, 1); // starting image uploaded to ComfyUI
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["30"].class_type, "LoadImage"); // loads the uploaded image
+  assert.equal(graph["31"].class_type, "VAEEncode"); // encodes it to a latent
+  assert.deepEqual(graph["31"].inputs.pixels, ["30", 0]);
+  assert.deepEqual(graph["31"].inputs.vae, ["10", 0]); // uses the workflow VAELoader
+  assert.deepEqual(graph["3"].inputs.latent_image, ["31", 0]); // sampler starts from the image
+  assert.equal(graph["3"].inputs.denoise, 0.6);
+});
+
+test("img2img: denoise defaults to 0.65 when omitted", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "x", initImage: REF_B64 }, mock.fetch);
+  assert.equal(mock.submitted[0]!.graph["3"].inputs.denoise, 0.65);
+});
+
+test("img2img: no initImage -> plain txt2img (EmptyLatentImage, denoise 1)", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "x" }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["30"], undefined);
+  assert.equal(graph["31"], undefined);
+  assert.deepEqual(graph["3"].inputs.latent_image, ["5", 0]); // still the empty latent
+  assert.equal(graph["3"].inputs.denoise, 1);
+});
+
+test("img2img: forces the base workflow at quality=high (no refiner)", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "x", initImage: REF_B64, quality: "high" }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["11"], undefined); // refiner checkpoint dropped
+  assert.equal(graph["3"].class_type, "KSampler"); // base sampler
+  assert.deepEqual(graph["3"].inputs.latent_image, ["31", 0]); // img2img applied
+});
+
+test("img2img: composes with a LoRA style and a checkpoint override", async () => {
+  const mock = new MockComfy();
+  await generateImage(
+    URL,
+    { prompt: "x", style: "anime", checkpoint: "custom.safetensors", initImage: REF_B64 },
+    mock.fetch,
+  );
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["20"].class_type, "LoraLoader"); // LoRA still applied
+  assert.equal(graph["4"].inputs.ckpt_name, "custom.safetensors"); // checkpoint override applied
+  assert.deepEqual(graph["3"].inputs.latent_image, ["31", 0]); // img2img latent
+});
+
+test("img2img: a failed upload returns a clean error (no silent txt2img)", async () => {
+  const mock = new MockComfy({ uploadStatus: 500 });
+  const result = await generateImage(URL, { prompt: "x", initImage: REF_B64 }, mock.fetch);
+  assert.equal(result.ok, false);
+  assert.match((result as { ok: false; error: string }).error, /img2img upload failed/);
+  assert.equal(mock.submitted.length, 0); // never reached /prompt
+});

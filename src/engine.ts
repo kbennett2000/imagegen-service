@@ -33,6 +33,11 @@ export interface GenerateParams {
   // resembles the reference (a character's portrait). Absent => plain txt2img (unchanged).
   references?: string[];
   referenceStrength?: number; // IP-Adapter weight; default REFERENCE_WEIGHT (tuned 0.55).
+  // img2img: a base64 PNG used as the STARTING image (its pixels are the canvas), transformed toward
+  // the prompt. Distinct from `references` (which conditions a fresh render on a likeness). When
+  // present, the engine encodes it into the sampler's latent and lowers `denoise` (ADR-0005).
+  initImage?: string;
+  denoise?: number; // img2img strength in (0,1]; lower = closer to the input. Default DENOISE_DEFAULT.
 }
 
 // IP-Adapter models (installed on the ComfyUI host) + tuned defaults. The face model at weight ~0.55
@@ -42,6 +47,9 @@ export interface GenerateParams {
 const IPADAPTER_FILE = "ip-adapter-plus-face_sdxl_vit-h.safetensors";
 const CLIP_VISION_FILE = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors";
 const REFERENCE_WEIGHT = 0.55;
+// img2img default denoise: keeps the input's composition while letting the prompt substantially
+// repaint it. Lower hews closer to the original; higher drifts toward pure txt2img.
+const DENOISE_DEFAULT = 0.65;
 
 export type GenerateResult =
   | { ok: true; bytes: Buffer }
@@ -181,6 +189,20 @@ export function applyIPAdapter(graph: Graph, imageName: string, weight: number):
   if (graph["3"]) graph["3"].inputs.model = ["24", 0]; // base sampler <- IP-Adapter-modified model
 }
 
+// applyImg2Img — make the request start from an input image instead of noise. Encodes the uploaded
+// image to a latent (LoadImage(30) -> VAEEncode(31) using the workflow's VAELoader "10") and points
+// the base sampler "3" at it, lowering `denoise` so the prompt repaints rather than replaces. Node
+// ids 30/31 avoid the LoRA "20" / IP-Adapter "21"-"24" ranges, so img2img composes with both. The
+// output size then follows the input image (EmptyLatentImage "5" is no longer the sampler's source).
+export function applyImg2Img(graph: Graph, imageName: string, denoise: number): void {
+  graph["30"] = { class_type: "LoadImage", inputs: { image: imageName } };
+  graph["31"] = { class_type: "VAEEncode", inputs: { pixels: ["30", 0], vae: ["10", 0] } };
+  if (graph["3"]) {
+    graph["3"].inputs.latent_image = ["31", 0];
+    graph["3"].inputs.denoise = denoise;
+  }
+}
+
 // ---- ComfyUI transport helpers -----------------------------------------------------------
 
 function comfyBase(url: string): string {
@@ -234,11 +256,11 @@ async function ipAdapterAvailable(base: string, fetchFn: FetchFn): Promise<boole
 }
 
 // Upload one base64 PNG to ComfyUI's input/ dir; returns the stored filename for a LoadImage node.
-// A unique name per upload avoids clobbering when requests overlap. Throws on failure (the caller
-// catches and renders prompt-only).
-async function uploadReference(base: string, fetchFn: FetchFn, b64: string): Promise<string> {
+// A unique name per upload avoids clobbering when requests overlap. Used by both the IP-Adapter
+// reference path and img2img. Throws on failure (the caller decides how to handle it).
+async function uploadImage(base: string, fetchFn: FetchFn, b64: string): Promise<string> {
   const bytes = Buffer.from(b64, "base64");
-  const filename = `ref-${randomSeed().toString(16)}.png`;
+  const filename = `img-${randomSeed().toString(16)}.png`;
   const form = new FormData();
   form.append("image", new Blob([bytes], { type: "image/png" }), filename);
   form.append("overwrite", "true");
@@ -335,9 +357,9 @@ export async function generateImage(
       }
     }
 
-    // IP-Adapter needs the base graph's node ids (checkpoint "4", LoRA "20", sampler "3"); the
-    // refiner graph has a different shape. Force base when references are present (like noRefiner).
-    if (params.references?.length && tier.workflow === REFINER_WORKFLOW) {
+    // IP-Adapter and img2img both need the base graph's node ids (VAELoader "10", sampler "3"); the
+    // refiner graph has a different shape. Force base when either is present (like noRefiner).
+    if ((params.references?.length || params.initImage) && tier.workflow === REFINER_WORKFLOW) {
       tier = { workflow: BASE_WORKFLOW, steps: 25, timeoutMs: tier.timeoutMs };
     }
 
@@ -370,7 +392,7 @@ export async function generateImage(
     if (firstReference) {
       try {
         if (await ipAdapterAvailable(base, fetchFn)) {
-          const name = await uploadReference(base, fetchFn, firstReference);
+          const name = await uploadImage(base, fetchFn, firstReference);
           applyIPAdapter(graph, name, params.referenceStrength ?? REFERENCE_WEIGHT);
         } else {
           console.error(
@@ -380,6 +402,19 @@ export async function generateImage(
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         console.error(`[engine] IP-Adapter reference failed (${reason}) — rendering without reference`);
+      }
+    }
+
+    // img2img block — upload the starting image and repoint the sampler at its encoded latent. Unlike
+    // the reference path, a failure here is NOT swallowed: silently rendering txt2img would ignore the
+    // caller's image and hand back an unrelated picture, so the whole request fails cleanly instead.
+    if (params.initImage) {
+      try {
+        const name = await uploadImage(base, fetchFn, params.initImage);
+        applyImg2Img(graph, name, params.denoise ?? DENOISE_DEFAULT);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: `img2img upload failed: ${reason}` };
       }
     }
 

@@ -132,6 +132,8 @@ a warning.)
   "width": 832,                                   // optional; multiple of 8 in [256, 2048]; default 1024
   "height": 1216,                                 // optional; multiple of 8 in [256, 2048]; default 1024
   "checkpoint": "myModel.safetensors",            // optional; base checkpoint override (see below)
+  "initImage": "<base64-png>",                    // optional; img2img starting image (see below)
+  "denoise": 0.65,                                // optional; img2img strength in (0, 1]; default 0.65
   "references": ["<base64-png>"],                 // optional; up to 4 base64 PNGs (see below)
   "referenceStrength": 0.55 }                     // optional; number in (0, 1.5]; default 0.55
 ```
@@ -174,6 +176,24 @@ curl -X POST http://localhost:8189/generate \
 - Any SDXL checkpoint installed in ComfyUI's `models/checkpoints/` works. The name is validated
   lightly (non-empty, ≤ 200 chars, no path traversal); ComfyUI is the authority — an **unknown name
   returns `503`** (rejected workflow), it is not silently swapped.
+
+#### Image-to-image (`initImage` / `denoise`)
+
+Supplying `initImage` (a base64 PNG) starts the render **from that image** instead of from noise, and
+the prompt repaints it — restyling a photo, iterating on an existing image, etc. (ADR-0005).
+
+- **`denoise`** (`(0, 1]`, default **0.65**) is the whole knob: low (~0.3) stays very close to the
+  input, high (~0.85) transforms it heavily, `1` ≈ ignores it (pure txt2img).
+- **Output size follows the input image**; `width`/`height` are ignored in img2img mode.
+- **Forces the base workflow** even at `quality: "high"` (the refiner graph differs).
+- Composes with `style`, `checkpoint`, and `negativePrompt`. Send ~1 MP images — very large inputs
+  are slow and can duplicate/warp (the built-in UI downscales to ≤1024px automatically).
+- If the upload to ComfyUI fails, the request returns **503** (it does *not* silently fall back to
+  txt2img — that would ignore your image).
+
+> **img2img vs. reference images:** `initImage` uses your image's *pixels* as the canvas.
+> `references` (below) instead keeps a *face/identity* while generating a brand-new scene. Different
+> jobs — pick `initImage` to transform a picture, `references` to keep a character consistent.
 
 #### Reference images (IP-Adapter / character consistency)
 
@@ -267,9 +287,11 @@ http://localhost:8189/        # or http://<gpu-box-ip>:8189/ from another machin
 
 It shows a health line (ComfyUI reachable? how many recipe LoRAs), a style dropdown populated from
 `/styles`, a **Model dropdown** populated from `/health`'s installed-checkpoint list (defaulting to
-the effective checkpoint), and a form (prompt, negative prompt, style, model, quality, seed) that
-POSTs to `/generate` and renders the returned PNG with the elapsed time; errors (401/422/503) are
-shown readably. It's a convenience harness only — not a production surface.
+the effective checkpoint), width/height fields, and two optional image pickers — a **Starting image**
+(img2img, with a "change amount"/denoise slider) and a **Reference photo** (IP-Adapter, with a
+likeness slider). The form POSTs to `/generate` and renders the returned PNG with the elapsed time;
+errors (401/422/503) are shown readably. Chosen images are downscaled client-side to ≤1024px before
+upload. It's a convenience harness only — not a production surface.
 
 When `auth.enabled` is `true`, paste the token into the page's **Auth token** field: `/styles` and
 `/generate` are gated (the dropdown shows an "enter token" hint until you do), while the page itself
