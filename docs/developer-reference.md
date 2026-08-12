@@ -54,6 +54,8 @@ by hand.
 - **Optional, for reference images:** the ComfyUI IP-Adapter custom node plus
   `ip-adapter-plus-face_sdxl_vit-h.safetensors` and `CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors`
   (the service degrades gracefully to prompt-only if these are absent).
+- **Optional, for upscaling:** at least one upscale model in `models/upscale_models/` (e.g.
+  `RealESRGAN_x4plus.pth`). Without one, `upscale` requests return 503; everything else works.
 
 ## Run
 
@@ -77,7 +79,7 @@ cp config.example.json config.json
 
 ```json
 {
-  "comfyui": { "url": "http://localhost:8188", "checkpoint": "" },
+  "comfyui": { "url": "http://localhost:8188", "checkpoint": "", "upscaleModel": "" },
   "server":  { "host": "0.0.0.0", "port": 8189 },
   "auth":    { "enabled": false, "token": "" }
 }
@@ -90,6 +92,9 @@ cp config.example.json config.json
   (e.g. `"sd_xl_base_1.0.safetensors"`). **Empty string** (the default) keeps the workflow
   templates' built-in checkpoint. Any checkpoint installed in ComfyUI's `models/checkpoints/` can
   be named here; a per-request `checkpoint` overrides it. See ADR-0004.
+- **`comfyui.upscaleModel`** — the default upscale model, named as ComfyUI lists it (e.g.
+  `"RealESRGAN_x4plus.pth"`). **Empty string** (the default) auto-picks the first installed model
+  when a request asks to upscale; a per-request `upscaleModel` overrides it. See ADR-0006.
 - **`server.host`** — defaults to `0.0.0.0` (LAN-exposed) **by design**: the service exists to be
   called across the LAN, matching the open-ComfyUI stance. Set it to `127.0.0.1` if you ever want
   local-only.
@@ -135,7 +140,9 @@ a warning.)
   "initImage": "<base64-png>",                    // optional; img2img starting image (see below)
   "denoise": 0.65,                                // optional; img2img strength in (0, 1]; default 0.65
   "references": ["<base64-png>"],                 // optional; up to 4 base64 PNGs (see below)
-  "referenceStrength": 0.55 }                     // optional; number in (0, 1.5]; default 0.55
+  "referenceStrength": 0.55,                      // optional; number in (0, 1.5]; default 0.55
+  "upscale": 2,                                   // optional; enlarge factor in (1, 4] (see below)
+  "upscaleModel": "RealESRGAN_x4plus.pth" }       // optional; which upscale model (see below)
 ```
 
 - `200 image/png` — raw bytes.
@@ -212,6 +219,20 @@ drives the scene itself. Notes on the current behavior:
   [Requirements](#requirements)). If they're missing or an upload fails, the request **degrades
   gracefully to prompt-only** rather than erroring.
 
+#### Upscaling (`upscale` / `upscaleModel`)
+
+`upscale` enlarges the **finished** image with a trained super-resolution (ESRGAN-style) model — a
+post-process, so it works on any generation (txt2img, img2img, styled, etc.). See ADR-0006.
+
+- **`upscale`** is the target factor in `(1, 4]` (e.g. `2`, `4`). **Output size = generated size ×
+  factor** (a 4× of 1024² is 4096²).
+- **`upscaleModel`** picks which model, named as ComfyUI lists it (see `GET /health` for the
+  installed list). Precedence: **request > `config.comfyui.upscaleModel` > the first installed
+  model**.
+- Requires an upscale model in ComfyUI's `models/upscale_models/`. If **none is installed** the
+  request returns **503** (it does not silently skip) — put one there (e.g. `RealESRGAN_x4plus.pth`).
+- This is pure super-resolution (sharpen + enlarge). It does not re-imagine detail.
+
 ### `GET /styles`
 
 Lists the preset styles that have a LoRA recipe. Styles not listed are still accepted by
@@ -248,7 +269,9 @@ curl http://localhost:8189/health
 { "comfyuiReachable": true, "comfyuiUrl": "http://localhost:8188",
   "lorasLoaded": ["ClassipeintXL2.1.safetensors", "..."],
   "checkpoint": "sd_xl_base_1.0.safetensors",
-  "checkpoints": ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors", "..."] }
+  "checkpoints": ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors", "..."],
+  "upscaleModel": "RealESRGAN_x4plus.pth",
+  "upscaleModels": ["RealESRGAN_x4plus.pth", "..."] }
 ```
 
 - `lorasLoaded` — which recipe LoRAs are actually present on the ComfyUI host.
@@ -256,6 +279,8 @@ curl http://localhost:8189/health
   template's).
 - `checkpoints` — every checkpoint ComfyUI can load, so a client can offer a model picker (the
   built-in test UI does exactly this).
+- `upscaleModel` / `upscaleModels` — the effective default upscale model (config override, else the
+  first installed) and the full installed list (empty if none — upscaling is then unavailable).
 
 ## Quality tiers
 
@@ -289,7 +314,8 @@ It shows a health line (ComfyUI reachable? how many recipe LoRAs), a style dropd
 `/styles`, a **Model dropdown** populated from `/health`'s installed-checkpoint list (defaulting to
 the effective checkpoint), width/height fields, and two optional image pickers — a **Starting image**
 (img2img, with a "change amount"/denoise slider) and a **Reference photo** (IP-Adapter, with a
-likeness slider). The form POSTs to `/generate` and renders the returned PNG with the elapsed time;
+likeness slider), and an **Upscale** control (Off / 2× / 4×, enabled when an upscale model is
+installed). The form POSTs to `/generate` and renders the returned PNG with the elapsed time;
 errors (401/422/503) are shown readably. Chosen images are downscaled client-side to ≤1024px before
 upload. It's a convenience harness only — not a production surface.
 

@@ -329,3 +329,72 @@ test("img2img: a failed upload returns a clean error (no silent txt2img)", async
   assert.match((result as { ok: false; error: string }).error, /img2img upload failed/);
   assert.equal(mock.submitted.length, 0); // never reached /prompt
 });
+
+// ---- upscaling (upscale / upscaleModel) ----
+
+import { parseUpscaleFactor } from "../src/engine.ts";
+
+test("parseUpscaleFactor reads the native factor from the model name", () => {
+  assert.equal(parseUpscaleFactor("4x-UltraSharp.pth"), 4);
+  assert.equal(parseUpscaleFactor("RealESRGAN_x4plus.pth"), 4);
+  assert.equal(parseUpscaleFactor("2x_foo.pth"), 2);
+  assert.equal(parseUpscaleFactor("no-number-here.pth"), 4); // default
+});
+
+test("upscale: factor == model native -> UpscaleModelLoader + ImageUpscaleWithModel, no scale-by", async () => {
+  const mock = new MockComfy({ upscaleModels: ["RealESRGAN_x4plus.pth"] });
+  const result = await generateImage(URL, { prompt: "x", upscale: 4 }, mock.fetch);
+  assert.equal(result.ok, true);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["40"].class_type, "UpscaleModelLoader");
+  assert.equal(graph["40"].inputs.model_name, "RealESRGAN_x4plus.pth");
+  assert.equal(graph["41"].class_type, "ImageUpscaleWithModel");
+  assert.deepEqual(graph["41"].inputs.image, ["8", 0]); // upscales the final decoded image
+  assert.equal(graph["42"], undefined); // native == requested, no correction pass
+  assert.deepEqual(graph["9"].inputs.images, ["41", 0]); // SaveImage <- upscaled
+});
+
+test("upscale: factor < native adds an ImageScaleBy correction (scale_by native-relative)", async () => {
+  const mock = new MockComfy({ upscaleModels: ["RealESRGAN_x4plus.pth"] }); // native 4x
+  await generateImage(URL, { prompt: "x", upscale: 2 }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["42"].class_type, "ImageScaleBy");
+  assert.equal(graph["42"].inputs.scale_by, 0.5); // 2 / 4
+  assert.deepEqual(graph["42"].inputs.image, ["41", 0]);
+  assert.deepEqual(graph["9"].inputs.images, ["42", 0]);
+});
+
+test("upscale: explicit upscaleModel is used verbatim", async () => {
+  const mock = new MockComfy({ upscaleModels: ["a.pth", "b.pth"] });
+  await generateImage(URL, { prompt: "x", upscale: 4, upscaleModel: "b.pth" }, mock.fetch);
+  assert.equal(mock.submitted[0]!.graph["40"].inputs.model_name, "b.pth");
+});
+
+test("upscale: no model installed -> clean error, never reaches /prompt", async () => {
+  const mock = new MockComfy({ upscaleModels: [] });
+  const result = await generateImage(URL, { prompt: "x", upscale: 2 }, mock.fetch);
+  assert.equal(result.ok, false);
+  assert.match((result as { ok: false; error: string }).error, /no upscale model/);
+  assert.equal(mock.submitted.length, 0);
+});
+
+test("upscale: composes with img2img (upscales node 8, the final image)", async () => {
+  const mock = new MockComfy({ upscaleModels: ["RealESRGAN_x4plus.pth"] });
+  await generateImage(URL, { prompt: "x", initImage: REF_B64, upscale: 4 }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.deepEqual(graph["3"].inputs.latent_image, ["31", 0]); // img2img still applied
+  assert.deepEqual(graph["41"].inputs.image, ["8", 0]); // upscale reads the decoded output
+  assert.deepEqual(graph["9"].inputs.images, ["41", 0]);
+});
+
+import { comboOptions } from "../src/engine.ts";
+
+test("comboOptions handles both ComfyUI object_info schemas", () => {
+  // legacy: [[...names...], {...}]
+  assert.deepEqual(comboOptions([["a.pth", "b.pth"], { foo: 1 }]), ["a.pth", "b.pth"]);
+  // newer: ["COMBO", { options: [...names...] }]
+  assert.deepEqual(comboOptions(["COMBO", { multiselect: false, options: ["c.pth"] }]), ["c.pth"]);
+  // junk / empty
+  assert.deepEqual(comboOptions(undefined), []);
+  assert.deepEqual(comboOptions(["COMBO", {}]), []);
+});
