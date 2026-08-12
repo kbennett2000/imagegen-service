@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="imagegen-service — type a description, get a picture">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2130"/>
+      <stop offset="0.5" stop-color="#2a2140"/>
+      <stop offset="1" stop-color="#3a1f38"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7c5cff"/>
+      <stop offset="0.5" stop-color="#c15cff"/>
+      <stop offset="1" stop-color="#ff7a9c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.8" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#c15cff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#c15cff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="360" fill="url(#bg)"/>
+  <rect width="1280" height="360" fill="url(#glow)"/>
+
+  <!-- little "generated tiles" motif on the right -->
+  <g opacity="0.9">
+    <rect x="940" y="70" width="90" height="90" rx="12" fill="#7c5cff" opacity="0.55"/>
+    <rect x="1042" y="70" width="90" height="90" rx="12" fill="#c15cff" opacity="0.55"/>
+    <rect x="1144" y="70" width="72" height="90" rx="12" fill="#ff7a9c" opacity="0.55"/>
+    <rect x="940" y="172" width="90" height="90" rx="12" fill="#ff7a9c" opacity="0.4"/>
+    <rect x="1042" y="172" width="90" height="90" rx="12" fill="#7c5cff" opacity="0.4"/>
+    <rect x="1144" y="172" width="72" height="90" rx="12" fill="#c15cff" opacity="0.4"/>
+  </g>
+
+  <text x="80" y="150" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="72" font-weight="800" fill="#ffffff">imagegen-service</text>
+  <rect x="82" y="176" width="360" height="6" rx="3" fill="url(#accent)"/>
+  <text x="80" y="228" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="30" font-weight="500" fill="#e8eaf2">Type a description, get a picture.</text>
+  <text x="80" y="272" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="22" fill="#aab0c6">Free and private image generation, on your own computer.</text>
+
+  <text x="80" y="330" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="15" fill="#7f86a0">placeholder banner — real generated artwork lands on the next pass</text>
+</svg>
