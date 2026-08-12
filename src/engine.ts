@@ -257,6 +257,21 @@ function randomSeed(): number {
   return Math.floor(Math.random() * 0x1_0000_0000);
 }
 
+// Extract the option list from a ComfyUI combo input definition, tolerating both schemas ComfyUI
+// emits: the legacy `[[...names...], {...}]` (names at [0]) and the newer
+// `["COMBO", { options: [...names...] }]` (names under the trailing meta object's `options`). Some
+// nodes (e.g. UpscaleModelLoader) use the new shape while others (CheckpointLoaderSimple, LoraLoader)
+// still use the old one on the same server. Returns [] for anything unrecognized.
+export function comboOptions(def: unknown): string[] {
+  if (!Array.isArray(def)) return [];
+  if (Array.isArray(def[0])) return def[0] as string[]; // legacy: names at [0]
+  const meta = def[def.length - 1];
+  if (meta && typeof meta === "object" && Array.isArray((meta as Record<string, unknown>).options)) {
+    return (meta as Record<string, unknown>).options as string[];
+  }
+  return [];
+}
+
 // Query ComfyUI's own filesystem for the LoRAs it can load. Used by /health and by the
 // per-request availability check. Returns [] on any failure.
 export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[]> {
@@ -266,8 +281,7 @@ export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[
     });
     if (!res.ok) return [];
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
-    const names = info?.LoraLoader?.input?.required?.lora_name?.[0];
-    return Array.isArray(names) ? (names as string[]) : [];
+    return comboOptions(info?.LoraLoader?.input?.required?.lora_name);
   } catch {
     return [];
   }
@@ -287,8 +301,8 @@ async function ipAdapterAvailable(base: string, fetchFn: FetchFn): Promise<boole
     });
     if (!res.ok) return false;
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
-    const files = info?.IPAdapterModelLoader?.input?.required?.ipadapter_file?.[0];
-    return Array.isArray(files) && files.includes(IPADAPTER_FILE);
+    const files = comboOptions(info?.IPAdapterModelLoader?.input?.required?.ipadapter_file);
+    return files.includes(IPADAPTER_FILE);
   } catch {
     return false;
   }
@@ -329,19 +343,14 @@ export async function probeComfy(
     });
     if (!res.ok) return empty;
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
-    const names = info?.LoraLoader?.input?.required?.lora_name?.[0];
+    const loras = comboOptions(info?.LoraLoader?.input?.required?.lora_name);
     // Reachability is established; the checkpoint/upscale lists are best-effort second probes that
     // must not fail /health if they error (return [] then).
     const [checkpoints, upscaleModels] = await Promise.all([
       listCheckpoints(base, fetchFn),
       listUpscaleModels(base, fetchFn),
     ]);
-    return {
-      reachable: true,
-      loras: Array.isArray(names) ? (names as string[]) : [],
-      checkpoints,
-      upscaleModels,
-    };
+    return { reachable: true, loras, checkpoints, upscaleModels };
   } catch {
     return empty;
   }
@@ -355,8 +364,7 @@ export async function listCheckpoints(base: string, fetchFn: FetchFn): Promise<s
     });
     if (!res.ok) return [];
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
-    const names = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0];
-    return Array.isArray(names) ? (names as string[]) : [];
+    return comboOptions(info?.CheckpointLoaderSimple?.input?.required?.ckpt_name);
   } catch {
     return [];
   }
@@ -370,8 +378,7 @@ export async function listUpscaleModels(base: string, fetchFn: FetchFn): Promise
     });
     if (!res.ok) return [];
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
-    const names = info?.UpscaleModelLoader?.input?.required?.model_name?.[0];
-    return Array.isArray(names) ? (names as string[]) : [];
+    return comboOptions(info?.UpscaleModelLoader?.input?.required?.model_name);
   } catch {
     return [];
   }

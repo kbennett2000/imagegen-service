@@ -386,3 +386,15 @@ test("upscale: composes with img2img (upscales node 8, the final image)", async 
   assert.deepEqual(graph["41"].inputs.image, ["8", 0]); // upscale reads the decoded output
   assert.deepEqual(graph["9"].inputs.images, ["41", 0]);
 });
+
+import { comboOptions } from "../src/engine.ts";
+
+test("comboOptions handles both ComfyUI object_info schemas", () => {
+  // legacy: [[...names...], {...}]
+  assert.deepEqual(comboOptions([["a.pth", "b.pth"], { foo: 1 }]), ["a.pth", "b.pth"]);
+  // newer: ["COMBO", { options: [...names...] }]
+  assert.deepEqual(comboOptions(["COMBO", { multiselect: false, options: ["c.pth"] }]), ["c.pth"]);
+  // junk / empty
+  assert.deepEqual(comboOptions(undefined), []);
+  assert.deepEqual(comboOptions(["COMBO", {}]), []);
+});

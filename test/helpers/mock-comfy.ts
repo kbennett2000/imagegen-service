@@ -110,11 +110,15 @@ export class MockComfy {
         });
       }
 
-      // GET /object_info/UpscaleModelLoader — advertises the installed upscale models.
+      // GET /object_info/UpscaleModelLoader — advertises the installed upscale models. Uses ComfyUI's
+      // NEWER combo schema (`["COMBO", {options:[...]}]`), which this node emits on real servers even
+      // while the checkpoint/lora loaders still use the legacy `[[...],{}]` shape.
       if (method === "GET" && path.startsWith("/object_info/UpscaleModelLoader")) {
         const models = this.opts.upscaleModels ?? [];
         return this.jsonResponse(200, {
-          UpscaleModelLoader: { input: { required: { model_name: [models] } } },
+          UpscaleModelLoader: {
+            input: { required: { model_name: ["COMBO", { multiselect: false, options: models }] } },
+          },
         });
       }
 
