@@ -32,7 +32,11 @@ export interface GenerateParams {
   // the engine uploads them to ComfyUI and injects an IP-Adapter apply node so the rendered subject
   // resembles the reference (a character's portrait). Absent => plain txt2img (unchanged).
   references?: string[];
-  referenceStrength?: number; // IP-Adapter weight; default REFERENCE_WEIGHT (tuned 0.55).
+  referenceStrength?: number; // IP-Adapter weight; default REFERENCE_WEIGHT.
+  // Fraction of the denoising schedule to complete BEFORE identity is injected; default
+  // REFERENCE_START. Raise it when the prompt's composition matters more than likeness (a
+  // multi-figure scene); lower it for a single-subject plate. See ADR-0006.
+  referenceStart?: number;
   // img2img: a base64 PNG used as the STARTING image (its pixels are the canvas), transformed toward
   // the prompt. Distinct from `references` (which conditions a fresh render on a likeness). When
   // present, the engine encodes it into the sampler's latent and lowers `denoise` (ADR-0005).
@@ -40,13 +44,26 @@ export interface GenerateParams {
   denoise?: number; // img2img strength in (0,1]; lower = closer to the input. Default DENOISE_DEFAULT.
 }
 
-// IP-Adapter models (installed on the ComfyUI host) + tuned defaults. The face model at weight ~0.55
-// keeps a character's identity (age/face/hair) while letting the text prompt drive the scene — the
-// value validated live against ComfyUI (a bust portrait reference at higher weight collapses every
-// scene into a bust). SDXL base + CLIP-ViT-H image encoder.
+// IP-Adapter models (installed on the ComfyUI host) + tuned defaults. SDXL base + CLIP-ViT-H
+// image encoder.
+//
+// ADR-0006: conditioning starts PART-WAY through the schedule, not at step 0. Injecting identity
+// from the first step lets the reference dictate *composition* — the caller's downstream book
+// shipped 84 plates that were near-copies of one two-figure reference painting, curtains and all.
+// The early high-noise steps decide the layout and the figure count; they must belong to the text
+// prompt alone. Identity lands afterwards, which is all a face adapter is for.
+//
+// The earlier mitigation for the same symptom was a lower `weight` (the note read "a bust portrait
+// reference at higher weight collapses every scene into a bust"). That traded identity strength for
+// composition and fixed neither; `startAt` separates the two concerns properly.
 const IPADAPTER_FILE = "ip-adapter-plus-face_sdxl_vit-h.safetensors";
 const CLIP_VISION_FILE = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors";
-const REFERENCE_WEIGHT = 0.55;
+const REFERENCE_WEIGHT = 0.5;
+const REFERENCE_START = 0.3;
+// `ip-adapter-plus-face` is trained on face crops. Fed a full bust it transfers the clothing and
+// background too. PrepImageForClipVision(crop_position:"top") reduces the reference to its head
+// before the CLIP-vision encode — the standard preparation for a face adapter.
+const PREP_NODE = "PrepImageForClipVision";
 // img2img default denoise: keeps the input's composition while letting the prompt substantially
 // repaint it. Lower hews closer to the original; higher drifts toward pure txt2img.
 const DENOISE_DEFAULT = 0.65;
@@ -160,7 +177,13 @@ export function applyLora(graph: Graph, recipe: StyleLora): void {
 // image. Adds LoadImage(21) -> IPAdapterModelLoader(22) + CLIPVisionLoader(23) -> IPAdapterAdvanced(24),
 // taking the model from the current source (the LoRA node "20" if present, else the checkpoint "4")
 // and repointing the base sampler "3" to the IP-Adapter-modified model. Mirrors applyLora's style.
-export function applyIPAdapter(graph: Graph, imageName: string, weight: number): void {
+export function applyIPAdapter(
+  graph: Graph,
+  imageName: string,
+  weight: number,
+  startAt: number = REFERENCE_START,
+  faceCrop: boolean = true,
+): void {
   const modelSource: [string, number] = graph["20"] ? ["20", 0] : ["4", 0];
   graph["21"] = { class_type: "LoadImage", inputs: { image: imageName } };
   graph["22"] = {
@@ -171,17 +194,34 @@ export function applyIPAdapter(graph: Graph, imageName: string, weight: number):
     class_type: "CLIPVisionLoader",
     inputs: { clip_name: CLIP_VISION_FILE },
   };
+  // Optional head crop (node "25"), skipped when the host lacks PrepImageForClipVision so the
+  // adapter still gets the raw reference rather than the render failing.
+  let imageSource: [string, number] = ["21", 0];
+  if (faceCrop) {
+    graph["25"] = {
+      class_type: PREP_NODE,
+      inputs: {
+        image: ["21", 0],
+        interpolation: "LANCZOS",
+        crop_position: "top",
+        sharpening: 0.0,
+      },
+    };
+    imageSource = ["25", 0];
+  }
   graph["24"] = {
     class_type: "IPAdapterAdvanced",
     inputs: {
       model: modelSource,
       ipadapter: ["22", 0],
-      image: ["21", 0],
+      image: imageSource,
       clip_vision: ["23", 0],
       weight,
-      weight_type: "linear",
+      // "ease in-out" tapers the injection at both ends of its window, so identity blends in
+      // rather than snapping on at `start_at` and leaving a seam.
+      weight_type: "ease in-out",
       combine_embeds: "concat",
-      start_at: 0.0,
+      start_at: startAt,
       end_at: 1.0,
       embeds_scaling: "V only",
     },
@@ -250,6 +290,21 @@ async function ipAdapterAvailable(base: string, fetchFn: FetchFn): Promise<boole
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
     const files = info?.IPAdapterModelLoader?.input?.required?.ipadapter_file?.[0];
     return Array.isArray(files) && files.includes(IPADAPTER_FILE);
+  } catch {
+    return false;
+  }
+}
+
+// Is a given custom node class installed on the ComfyUI host? Used for optional graph parts (the
+// face crop) that must degrade rather than fail the render. False on any error.
+async function nodeAvailable(base: string, fetchFn: FetchFn, classType: string): Promise<boolean> {
+  try {
+    const res = await fetchFn(`${base}/object_info/${classType}`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) return false;
+    const info = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    return Boolean(info?.[classType]);
   } catch {
     return false;
   }
@@ -393,7 +448,13 @@ export async function generateImage(
       try {
         if (await ipAdapterAvailable(base, fetchFn)) {
           const name = await uploadImage(base, fetchFn, firstReference);
-          applyIPAdapter(graph, name, params.referenceStrength ?? REFERENCE_WEIGHT);
+          applyIPAdapter(
+            graph,
+            name,
+            params.referenceStrength ?? REFERENCE_WEIGHT,
+            params.referenceStart ?? REFERENCE_START,
+            await nodeAvailable(base, fetchFn, PREP_NODE),
+          );
         } else {
           console.error(
             "[engine] IP-Adapter not available on ComfyUI host — rendering without reference",

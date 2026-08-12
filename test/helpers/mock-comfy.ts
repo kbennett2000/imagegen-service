@@ -17,6 +17,10 @@ export interface MockOptions {
   // Checkpoint files ComfyUI claims it can load (drives /health checkpoints). Default: the stock
   // SDXL pair.
   checkpoints?: string[];
+  // Custom node classes the host claims to have, beyond the loaders above (drives nodeAvailable /
+  // the optional face crop). Default: PrepImageForClipVision present. Set to [] to simulate an
+  // older IPAdapter pack without it.
+  nodes?: string[];
   // Simulate ComfyUI being down: every request rejects (network error).
   down?: boolean;
   // Make POST /prompt fail with this HTTP status (e.g. 400/500). Default: succeeds.
@@ -55,6 +59,9 @@ const DEFAULT_LORAS = [
 const DEFAULT_IPADAPTERS = ["ip-adapter-plus-face_sdxl_vit-h.safetensors"];
 
 const DEFAULT_CHECKPOINTS = ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"];
+
+// Optional node classes a stock ComfyUI + IPAdapter_plus install provides.
+const DEFAULT_NODES = ["PrepImageForClipVision"];
 
 export class MockComfy {
   readonly submitted: SubmittedPrompt[] = [];
@@ -113,6 +120,15 @@ export class MockComfy {
         return this.jsonResponse(200, {
           IPAdapterModelLoader: { input: { required: { ipadapter_file: [files] } } },
         });
+      }
+
+      // GET /object_info/<OtherClass> — presence probe for optional nodes. 404 when absent, so
+      // the engine's `nodeAvailable` sees exactly what a host without the node would return.
+      if (method === "GET" && path.startsWith("/object_info/")) {
+        const cls = decodeURIComponent(path.slice("/object_info/".length).split("?")[0]!);
+        const nodes = this.opts.nodes ?? DEFAULT_NODES;
+        if (!nodes.includes(cls)) return new Response("not found", { status: 404 });
+        return this.jsonResponse(200, { [cls]: { input: { required: {} } } });
       }
 
       // POST /upload/image — stores a reference image; returns its filename.
