@@ -94,6 +94,25 @@
         </div>
       </div>
 
+      <div class="row">
+        <div>
+          <label for="width">Width <span class="hint">(blank = 1024)</span></label>
+          <input id="width" type="number" step="8" min="256" max="2048" placeholder="1024" list="sdxl-sizes" />
+        </div>
+        <div>
+          <label for="height">Height <span class="hint">(blank = 1024)</span></label>
+          <input id="height" type="number" step="8" min="256" max="2048" placeholder="1024" list="sdxl-sizes" />
+        </div>
+      </div>
+      <datalist id="sdxl-sizes">
+        <option value="1024"></option><option value="1152"></option>
+        <option value="896"></option><option value="1216"></option><option value="832"></option>
+      </datalist>
+      <p class="hint" style="margin:.3rem 0 0">
+        Multiple of 8, 256–2048. SDXL is happiest near 1024² total — good shapes: 1024×1024,
+        896×1152 (portrait), 1152×896 (landscape), 832×1216. Much bigger can duplicate/warp.
+      </p>
+
       <label for="token">Auth token <span class="hint">(only if auth is enabled)</span></label>
       <input id="token" type="text" placeholder="Bearer token — leave blank on open LAN" autocomplete="off" />
 
@@ -234,6 +253,10 @@
       body.quality = $("quality").value;
       const seedRaw = $("seed").value.trim();
       if (seedRaw !== "") body.seed = Number(seedRaw);
+      const wRaw = $("width").value.trim();
+      if (wRaw !== "") body.width = Number(wRaw);
+      const hRaw = $("height").value.trim();
+      if (hRaw !== "") body.height = Number(hRaw);
 
       const go = $("go");
       go.disabled = true;

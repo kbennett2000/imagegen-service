@@ -198,9 +198,53 @@ test("references -> IP-Adapter chain injected + reference uploaded", async () =>
   assert.equal(graph["24"].class_type, "IPAdapterAdvanced");
   // No LoRA, so the IP-Adapter takes the model straight from the checkpoint; sampler <- IP-Adapter.
   assert.deepEqual(graph["24"].inputs.model, ["4", 0]);
-  assert.deepEqual(graph["24"].inputs.image, ["21", 0]);
+  // The adapter reads the CROPPED image (25), not the raw upload (21) — ADR-0005.
+  assert.deepEqual(graph["24"].inputs.image, ["25", 0]);
   assert.deepEqual(graph["3"].inputs.model, ["24", 0]);
-  assert.equal(graph["24"].inputs.weight, 0.55); // tuned default
+  assert.equal(graph["24"].inputs.weight, 0.5); // tuned default
+});
+
+// --- ADR-0005: identity, not composition ------------------------------------
+
+test("IP-Adapter starts part-way through the schedule so the prompt owns composition", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "two people talking", references: [REF_B64] }, mock.fetch);
+  const ipa = mock.submitted[0]!.graph["24"].inputs;
+  // start_at > 0 is the whole point: the early high-noise steps decide layout and figure count,
+  // and they must belong to the text prompt alone.
+  assert.equal(ipa.start_at, 0.3);
+  assert.equal(ipa.end_at, 1.0);
+  assert.equal(ipa.weight_type, "ease in-out");
+});
+
+test("referenceStart overrides the default schedule offset", async () => {
+  const mock = new MockComfy();
+  await generateImage(
+    URL,
+    { prompt: "a man", references: [REF_B64], referenceStart: 0.45 },
+    mock.fetch,
+  );
+  assert.equal(mock.submitted[0]!.graph["24"].inputs.start_at, 0.45);
+});
+
+test("the reference is head-cropped before the CLIP-vision encode", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "a man", references: [REF_B64] }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["25"].class_type, "PrepImageForClipVision");
+  assert.deepEqual(graph["25"].inputs.image, ["21", 0]); // crops the uploaded reference
+  assert.equal(graph["25"].inputs.crop_position, "top"); // the head of a bust portrait
+  assert.deepEqual(graph["24"].inputs.image, ["25", 0]);
+});
+
+test("crop node absent on host -> conditions on the raw reference, still renders", async () => {
+  const mock = new MockComfy({ nodes: [] }); // older IPAdapter pack, no PrepImageForClipVision
+  const result = await generateImage(URL, { prompt: "a man", references: [REF_B64] }, mock.fetch);
+  assert.equal(result.ok, true);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["25"], undefined);
+  assert.deepEqual(graph["24"].inputs.image, ["21", 0]); // falls back to the uncropped upload
+  assert.equal(graph["24"].inputs.start_at, 0.3); // the schedule offset still applies
 });
 
 test("references + style: IP-Adapter chains AFTER the LoRA (model 4 -> 20 -> 24 -> sampler)", async () => {

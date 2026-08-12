@@ -463,3 +463,20 @@ test("GET /health -> effective checkpoint falls back to the stock default when u
     await svc.close();
   }
 });
+
+test("POST /generate -> 422 on an out-of-range referenceStart", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    // Past half the schedule there is too little signal left for a likeness to form (ADR-0005).
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", referenceStart: 0.9 }),
+    });
+    assert.equal(res.status, 422);
+    assert.equal(mock.submitted.length, 0);
+  } finally {
+    await svc.close();
+  }
+});
