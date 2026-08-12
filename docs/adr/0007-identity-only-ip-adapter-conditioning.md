@@ -1,4 +1,4 @@
-# ADR-0006: Identity-only IP-Adapter conditioning
+# ADR-0007: Identity-only IP-Adapter conditioning
 
 - **Status:** Accepted
 - **Date:** 2026-08-12

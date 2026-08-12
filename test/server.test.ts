@@ -468,7 +468,7 @@ test("POST /generate -> 422 on an out-of-range referenceStart", async () => {
   const mock = new MockComfy();
   const svc = await startService(mock);
   try {
-    // Past half the schedule there is too little signal left for a likeness to form (ADR-0006).
+    // Past half the schedule there is too little signal left for a likeness to form (ADR-0007).
     const res = await fetch(`${svc.base}/generate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -537,6 +537,94 @@ test("POST /generate -> 422 on empty initImage", async () => {
     assert.equal(res.status, 422);
     const body = (await res.json()) as any;
     assert.match(body.error, /initImage/);
+  } finally {
+    await svc.close();
+  }
+});
+
+// ---- upscaling (upscale / upscaleModel) ----
+
+test("POST /generate -> upscale wires the upscale tail", async () => {
+  const mock = new MockComfy({ upscaleModels: ["RealESRGAN_x4plus.pth"] });
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", upscale: 4 }),
+    });
+    assert.equal(res.status, 200);
+    const graph = mock.submitted[0]!.graph;
+    assert.equal(graph["40"].class_type, "UpscaleModelLoader");
+    assert.deepEqual(graph["9"].inputs.images, ["41", 0]);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> config default upscaleModel applied when none requested", async () => {
+  const mock = new MockComfy({ upscaleModels: ["a.pth", "configured.pth"] });
+  const config: Config = {
+    comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "configured.pth" },
+    server: { host: "127.0.0.1", port: 0 },
+    auth: { enabled: false, token: "" },
+  };
+  const svc = await startService(mock, config);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", upscale: 4 }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(mock.submitted[0]!.graph["40"].inputs.model_name, "configured.pth");
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> 422 on upscale out of range", async () => {
+  const mock = new MockComfy({ upscaleModels: ["a.pth"] });
+  const svc = await startService(mock);
+  try {
+    for (const upscale of [1, 5]) {
+      const res = await fetch(`${svc.base}/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "x", upscale }),
+      });
+      assert.equal(res.status, 422);
+      assert.match(((await res.json()) as any).error, /upscale/);
+    }
+    assert.equal(mock.submitted.length, 0);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> 503 upscale requested but no model installed", async () => {
+  const mock = new MockComfy({ upscaleModels: [] });
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", upscale: 2 }),
+    });
+    assert.equal(res.status, 503);
+    assert.match(((await res.json()) as any).error, /no upscale model/);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("GET /health -> reports installed upscale models + effective default", async () => {
+  const mock = new MockComfy({ upscaleModels: ["RealESRGAN_x4plus.pth", "4x-UltraSharp.pth"] });
+  const svc = await startService(mock);
+  try {
+    const body = (await (await fetch(`${svc.base}/health`)).json()) as any;
+    assert.deepEqual(body.upscaleModels.sort(), ["4x-UltraSharp.pth", "RealESRGAN_x4plus.pth"]);
+    assert.equal(body.upscaleModel, "RealESRGAN_x4plus.pth"); // first installed (no config default)
   } finally {
     await svc.close();
   }

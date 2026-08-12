@@ -138,6 +138,16 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   ) {
     return { error: "`denoise` must be a number in (0, 1]" };
   }
+  if (
+    b.upscale !== undefined &&
+    (typeof b.upscale !== "number" || !Number.isFinite(b.upscale) || b.upscale <= 1 || b.upscale > 4)
+  ) {
+    return { error: "`upscale` must be a number in (1, 4]" };
+  }
+  if (b.upscaleModel !== undefined) {
+    const err = modelNameError("upscaleModel", b.upscaleModel);
+    if (err) return { error: err };
+  }
 
   const params: GenerateParams = { prompt: b.prompt };
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
@@ -154,6 +164,8 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   if (typeof b.referenceStart === "number") params.referenceStart = b.referenceStart;
   if (typeof b.initImage === "string" && b.initImage !== "") params.initImage = b.initImage;
   if (typeof b.denoise === "number") params.denoise = b.denoise;
+  if (typeof b.upscale === "number") params.upscale = b.upscale;
+  if (typeof b.upscaleModel === "string") params.upscaleModel = b.upscaleModel.trim();
   return { params };
 }
 
@@ -171,6 +183,20 @@ function checkpointError(value: unknown): string | null {
   }
   if (v.includes("..") || v.includes("\\") || v.includes("\0") || v.startsWith("/")) {
     return "`checkpoint` contains an invalid path";
+  }
+  return null;
+}
+
+// Same light path-safety as checkpointError, for any model-name field (e.g. `upscaleModel`).
+function modelNameError(field: string, value: unknown): string | null {
+  if (typeof value !== "string") return `\`${field}\` must be a string`;
+  const v = value.trim();
+  if (v === "") return `\`${field}\` must be a non-empty string`;
+  if (v.length > MAX_CHECKPOINT_LEN) {
+    return `\`${field}\` must be at most ${MAX_CHECKPOINT_LEN} characters`;
+  }
+  if (v.includes("..") || v.includes("\\") || v.includes("\0") || v.startsWith("/")) {
+    return `\`${field}\` contains an invalid path`;
   }
   return null;
 }
@@ -238,6 +264,11 @@ async function handleGenerate(
   if (!parsed.params.checkpoint && config.comfyui.checkpoint) {
     parsed.params.checkpoint = config.comfyui.checkpoint;
   }
+  // Same for the upscale model when an upscale was requested without naming one (the engine falls
+  // back to the first installed model if this is still empty).
+  if (parsed.params.upscale && !parsed.params.upscaleModel && config.comfyui.upscaleModel) {
+    parsed.params.upscaleModel = config.comfyui.upscaleModel;
+  }
   const result = await generateImage(config.comfyui.url, parsed.params, fetchFn);
   if (result.ok) {
     sendPng(res, result.bytes);
@@ -262,19 +293,23 @@ function handleStyles(res: ServerResponse): void {
 }
 
 async function handleHealth(res: ServerResponse, config: Config, fetchFn: FetchFn): Promise<void> {
-  const { reachable, loras, checkpoints } = await probeComfy(config.comfyui.url, fetchFn);
+  const { reachable, loras, checkpoints, upscaleModels } = await probeComfy(config.comfyui.url, fetchFn);
   // Report which recipe LoRAs are actually present on the GPU host.
   const recipeFiles = Array.from(new Set(Object.values(STYLE_LORAS).map((r) => r.loraFile)));
   const lorasLoaded = recipeFiles.filter((f) => loras.includes(f));
   // The effective default checkpoint (config override, else the workflow template's), plus the full
   // list ComfyUI can load so a client can offer a picker.
   const checkpoint = config.comfyui.checkpoint || DEFAULT_CHECKPOINT;
+  // Effective default upscale model (config override, else the first installed) + the full list.
+  const upscaleModel = config.comfyui.upscaleModel || upscaleModels[0] || "";
   sendJson(res, 200, {
     comfyuiReachable: reachable,
     comfyuiUrl: config.comfyui.url,
     lorasLoaded,
     checkpoint,
     checkpoints,
+    upscaleModel,
+    upscaleModels,
   });
 }
 

@@ -120,6 +120,22 @@
         896×1152 (portrait), 1152×896 (landscape), 832×1216. Much bigger can duplicate/warp.
       </p>
 
+      <div class="row">
+        <div>
+          <label for="upscale">Upscale <span class="hint">(enlarge & sharpen the result)</span></label>
+          <select id="upscale">
+            <option value="">Off</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+        </div>
+        <div id="upscaleModelBox" hidden>
+          <label for="upscaleModel">Upscaler</label>
+          <select id="upscaleModel"></select>
+        </div>
+      </div>
+      <p class="hint" id="upscaleHint" style="margin:.3rem 0 0" hidden></p>
+
       <div class="imgblock">
         <label for="initImageFile">Starting image <span class="hint">(optional — img2img)</span></label>
         <p class="hint" style="margin:.1rem 0 .3rem">
@@ -173,6 +189,9 @@
     const outputEl = $("output");
     const styleSel = $("style");
     const checkpointSel = $("checkpoint");
+    const upscaleSel = $("upscale");
+    const upscaleModelSel = $("upscaleModel");
+    let upscaleModelCount = 0;
     let defaultCheckpoint = "";
     let currentObjectUrl = null;
     let initImageB64 = null; // img2img starting image
@@ -263,10 +282,37 @@
             " — /generate will return 503 until it is up.";
         }
         populateCheckpoints(h);
+        populateUpscale(h);
       } catch (e) {
         statusEl.className = "status bad";
         statusEl.textContent = "Could not reach the service /health endpoint: " + e;
       }
+    }
+
+    // Enable the Upscale control only when ComfyUI has an upscale model installed. The model dropdown
+    // only appears when there's more than one to choose from (otherwise the single one is used).
+    function populateUpscale(h) {
+      const models = Array.isArray(h.upscaleModels) ? h.upscaleModels : [];
+      upscaleModelCount = models.length;
+      if (!models.length) {
+        upscaleSel.value = ""; upscaleSel.disabled = true;
+        $("upscaleModelBox").hidden = true;
+        $("upscaleHint").hidden = false;
+        $("upscaleHint").textContent =
+          "Install an upscale model in ComfyUI (models/upscale_models/) to enable this.";
+        return;
+      }
+      upscaleSel.disabled = false;
+      $("upscaleHint").hidden = false;
+      $("upscaleHint").textContent = "Makes the image larger and sharper — a bit slower.";
+      upscaleModelSel.innerHTML = "";
+      for (const name of models) {
+        const opt = document.createElement("option");
+        opt.value = name; opt.textContent = name;
+        if (name === h.upscaleModel) opt.selected = true;
+        upscaleModelSel.appendChild(opt);
+      }
+      $("upscaleModelBox").hidden = models.length < 2; // only show the picker when there's a choice
     }
 
     // Fill the Model dropdown from the live installed-checkpoint list, selecting the effective
@@ -349,6 +395,10 @@
       if (wRaw !== "") body.width = Number(wRaw);
       const hRaw = $("height").value.trim();
       if (hRaw !== "") body.height = Number(hRaw);
+      if (upscaleSel.value) {
+        body.upscale = Number(upscaleSel.value);
+        if (upscaleModelCount > 1 && upscaleModelSel.value) body.upscaleModel = upscaleModelSel.value;
+      }
       if (initImageB64) {
         body.initImage = initImageB64;
         body.denoise = Number($("denoise").value);

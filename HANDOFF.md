@@ -1,7 +1,7 @@
 # Handoff
 
 ## Current state
-**IP-Adapter conditions identity, not composition (ADR-0006, PR open for review).** `applyIPAdapter` injected the
+**IP-Adapter conditions identity, not composition (ADR-0007, PR open for review).** `applyIPAdapter` injected the
 reference across the *entire* denoising schedule (`start_at: 0.0`) and fed `plus-face` an
 **uncropped** bust. Both are wrong for a face adapter, and a downstream caller found out expensively:
 one of its character portraits happened to render as two men in uniform against red curtains, and
@@ -19,8 +19,30 @@ letting the adapter own them meant it dictated composition, not just likeness.
 - `weight_type` `"linear"` → **`"ease in-out"`**; default `weight` 0.55 → **0.5**.
 - New optional request field **`referenceStart`**, validated to `[0, 0.5]` (422 outside), beside the
   existing `referenceStrength`. File-config/request-driven only — still no env vars.
-- `npm run test:unit`: **55 passing**, CI-safe. `MockComfy` gained a `nodes` option so both the
+- `npm run test:unit`: **76 passing**, CI-safe. `MockComfy` gained a `nodes` option so both the
   crop-present and crop-absent paths are covered.
+
+### Prior — image upscaling (merged, PR #19)
+**Image upscaling (merged, PR #19).** Optional `upscale` factor on `POST /generate` enlarges the
+finished image with an ESRGAN-style model as a post-process (ADR-0006).
+
+- **Params**: `upscale` (factor in `(1,4]`) + optional `upscaleModel`. Precedence: request >
+  `config.comfyui.upscaleModel` > first installed model.
+- **Engine** `applyUpscale` inserts `UpscaleModelLoader "40"` → `ImageUpscaleWithModel "41"` (image
+  `["8",0]`), plus `ImageScaleBy "42"` (`scale_by: factor/native`) when the requested factor differs
+  from the model's native factor (parsed from its filename, default 4); repoints `SaveImage "9"`.
+  Runs **last**, so it composes with img2img/LoRA/IP-Adapter/refiner. No model installed → clean
+  **503**. Tier timeout bumped +60s when upscaling. New `listUpscaleModels` probe; `probeComfy`
+  returns `upscaleModels`.
+- **Config**: `comfyui.upscaleModel` (default `""` = auto-pick first). **Server**: validate `upscale`
+  (`(1,4]`) + `upscaleModel` (path-safe) → 422; `/health` reports `upscaleModel` + `upscaleModels`.
+- **UI** ([src/ui.html](src/ui.html)): an Upscale dropdown (Off/2×/4×), enabled only when `/health`
+  lists an upscale model; a model picker appears when >1 is installed.
+- Tests: `npm run test:unit` → **70 pass** (11 new). Mock gained an `upscaleModels` option +
+  `/object_info/UpscaleModelLoader` route. Docs: developer-reference + ADR-0006.
+- **Note:** for live use, an upscale model must sit in `~/comfyui/models/upscale_models/`
+  (RealESRGAN_x4plus.pth was fetched to this box); ComfyUI may need a restart to list a newly-added
+  upscale model.
 
 ### Prior — image-to-image (merged, PR #18)
 Optional `initImage` + `denoise` on `POST /generate` (ADR-0005), with matching test-UI controls.
