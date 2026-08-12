@@ -76,6 +76,9 @@
       <label for="style">Style</label>
       <select id="style"><option value="">(none / prompt-only)</option></select>
 
+      <label for="checkpoint">Model <span class="hint">(base checkpoint)</span></label>
+      <select id="checkpoint"><option value="">(loading…)</option></select>
+
       <div class="row">
         <div>
           <label for="quality">Quality</label>
@@ -111,6 +114,8 @@
     const metaEl = $("meta");
     const outputEl = $("output");
     const styleSel = $("style");
+    const checkpointSel = $("checkpoint");
+    let defaultCheckpoint = "";
     let currentObjectUrl = null;
 
     // Build headers, adding the bearer token only when one is entered.
@@ -154,9 +159,31 @@
           statusEl.textContent = "ComfyUI NOT reachable at " + (h.comfyuiUrl || "?") +
             " — /generate will return 503 until it is up.";
         }
+        populateCheckpoints(h);
       } catch (e) {
         statusEl.className = "status bad";
         statusEl.textContent = "Could not reach the service /health endpoint: " + e;
+      }
+    }
+
+    // Fill the Model dropdown from the live installed-checkpoint list, selecting the effective
+    // default. Whatever ComfyUI has installed shows up here — nothing is hardcoded.
+    function populateCheckpoints(h) {
+      defaultCheckpoint = h.checkpoint || "";
+      const list = Array.isArray(h.checkpoints) ? h.checkpoints : [];
+      checkpointSel.innerHTML = "";
+      if (!list.length) {
+        const opt = document.createElement("option");
+        opt.value = ""; opt.textContent = "(service default)";
+        checkpointSel.appendChild(opt);
+        return;
+      }
+      for (const name of list) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name + (name === defaultCheckpoint ? "  (default)" : "");
+        if (name === defaultCheckpoint) opt.selected = true;
+        checkpointSel.appendChild(opt);
       }
     }
 
@@ -202,6 +229,8 @@
       if (neg) body.negativePrompt = neg;
       const style = styleSel.value;
       if (style) body.style = style;
+      const checkpoint = checkpointSel.value;
+      if (checkpoint && checkpoint !== defaultCheckpoint) body.checkpoint = checkpoint;
       body.quality = $("quality").value;
       const seedRaw = $("seed").value.trim();
       if (seedRaw !== "") body.seed = Number(seedRaw);

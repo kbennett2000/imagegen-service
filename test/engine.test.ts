@@ -236,3 +236,34 @@ test("referenceStrength overrides the default IP-Adapter weight", async () => {
   await generateImage(URL, { prompt: "a man", references: [REF_B64], referenceStrength: 0.8 }, mock.fetch);
   assert.equal(mock.submitted[0]!.graph["24"].inputs.weight, 0.8);
 });
+
+test("checkpoint override -> base workflow node 4 ckpt_name is replaced", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "x", checkpoint: "juggernautXL_ragnarok.safetensors" }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["4"].class_type, "CheckpointLoaderSimple");
+  assert.equal(graph["4"].inputs.ckpt_name, "juggernautXL_ragnarok.safetensors");
+});
+
+test("checkpoint override at quality=high -> base node 4 replaced, refiner node 11 left stock", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "x", quality: "high", checkpoint: "my_model.safetensors" }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["4"].inputs.ckpt_name, "my_model.safetensors"); // base overridden
+  assert.equal(graph["11"].inputs.ckpt_name, "sd_xl_refiner_1.0.safetensors"); // refiner untouched
+});
+
+test("no checkpoint override -> node 4 keeps the workflow template default", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "x" }, mock.fetch);
+  assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, "sd_xl_base_1.0.safetensors");
+});
+
+test("checkpoint override composes with a LoRA style (node 20 still reads from node 4)", async () => {
+  const mock = new MockComfy();
+  await generateImage(URL, { prompt: "x", style: "anime", checkpoint: "custom.safetensors" }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["4"].inputs.ckpt_name, "custom.safetensors");
+  assert.equal(graph["20"].class_type, "LoraLoader");
+  assert.deepEqual(graph["20"].inputs.model, ["4", 0]); // LoRA still draws from the (overridden) checkpoint
+});

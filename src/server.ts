@@ -8,6 +8,7 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 
 import type { Config } from "./config.js";
 import {
+  DEFAULT_CHECKPOINT,
   generateImage,
   probeComfy,
   QUALITIES,
@@ -82,6 +83,10 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   if (b.style !== undefined && typeof b.style !== "string") {
     return { error: "`style` must be a string" };
   }
+  if (b.checkpoint !== undefined) {
+    const err = checkpointError(b.checkpoint);
+    if (err) return { error: err };
+  }
   if (b.quality !== undefined && !QUALITIES.includes(b.quality as Quality)) {
     return { error: `\`quality\` must be one of ${QUALITIES.join(", ")}` };
   }
@@ -122,7 +127,26 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
     params.references = b.references as string[];
   }
   if (typeof b.referenceStrength === "number") params.referenceStrength = b.referenceStrength;
+  if (typeof b.checkpoint === "string") params.checkpoint = b.checkpoint.trim();
   return { params };
+}
+
+// A checkpoint override is a ComfyUI ckpt_name (may include a forward-slash subfolder). We keep
+// validation light — ComfyUI is the authority on which names exist — but reject the obviously
+// unsafe/empty shapes: non-strings, empty/whitespace, overlong, path traversal, backslashes, NUL,
+// or an absolute path. Returns an error string for a 422, or null when valid.
+const MAX_CHECKPOINT_LEN = 200;
+function checkpointError(value: unknown): string | null {
+  if (typeof value !== "string") return "`checkpoint` must be a string";
+  const v = value.trim();
+  if (v === "") return "`checkpoint` must be a non-empty string";
+  if (v.length > MAX_CHECKPOINT_LEN) {
+    return `\`checkpoint\` must be at most ${MAX_CHECKPOINT_LEN} characters`;
+  }
+  if (v.includes("..") || v.includes("\\") || v.includes("\0") || v.startsWith("/")) {
+    return "`checkpoint` contains an invalid path";
+  }
+  return null;
 }
 
 // SDXL latent dimensions must be positive multiples of 8 within a sane range. Returns an error
@@ -183,6 +207,11 @@ async function handleGenerate(
     sendJson(res, 422, { error: parsed.error });
     return;
   }
+  // Apply the configured default checkpoint when the request didn't specify one (precedence:
+  // request > config > workflow-template default).
+  if (!parsed.params.checkpoint && config.comfyui.checkpoint) {
+    parsed.params.checkpoint = config.comfyui.checkpoint;
+  }
   const result = await generateImage(config.comfyui.url, parsed.params, fetchFn);
   if (result.ok) {
     sendPng(res, result.bytes);
@@ -207,14 +236,19 @@ function handleStyles(res: ServerResponse): void {
 }
 
 async function handleHealth(res: ServerResponse, config: Config, fetchFn: FetchFn): Promise<void> {
-  const { reachable, loras } = await probeComfy(config.comfyui.url, fetchFn);
+  const { reachable, loras, checkpoints } = await probeComfy(config.comfyui.url, fetchFn);
   // Report which recipe LoRAs are actually present on the GPU host.
   const recipeFiles = Array.from(new Set(Object.values(STYLE_LORAS).map((r) => r.loraFile)));
   const lorasLoaded = recipeFiles.filter((f) => loras.includes(f));
+  // The effective default checkpoint (config override, else the workflow template's), plus the full
+  // list ComfyUI can load so a client can offer a picker.
+  const checkpoint = config.comfyui.checkpoint || DEFAULT_CHECKPOINT;
   sendJson(res, 200, {
     comfyuiReachable: reachable,
     comfyuiUrl: config.comfyui.url,
     lorasLoaded,
+    checkpoint,
+    checkpoints,
   });
 }
 

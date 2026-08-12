@@ -77,7 +77,7 @@ cp config.example.json config.json
 
 ```json
 {
-  "comfyui": { "url": "http://localhost:8188" },
+  "comfyui": { "url": "http://localhost:8188", "checkpoint": "" },
   "server":  { "host": "0.0.0.0", "port": 8189 },
   "auth":    { "enabled": false, "token": "" }
 }
@@ -86,6 +86,10 @@ cp config.example.json config.json
 - **`comfyui.url`** — where ComfyUI is. Usually `http://localhost:8188` (ComfyUI on the same
   box). Point it at another host to front a **remote** ComfyUI, e.g.
   `"http://192.168.1.50:8188"`.
+- **`comfyui.checkpoint`** — the default base SDXL checkpoint, named exactly as ComfyUI lists it
+  (e.g. `"sd_xl_base_1.0.safetensors"`). **Empty string** (the default) keeps the workflow
+  templates' built-in checkpoint. Any checkpoint installed in ComfyUI's `models/checkpoints/` can
+  be named here; a per-request `checkpoint` overrides it. See ADR-0004.
 - **`server.host`** — defaults to `0.0.0.0` (LAN-exposed) **by design**: the service exists to be
   called across the LAN, matching the open-ComfyUI stance. Set it to `127.0.0.1` if you ever want
   local-only.
@@ -127,6 +131,7 @@ a warning.)
   "seed": 12345,                                  // optional; random if omitted
   "width": 832,                                   // optional; multiple of 8 in [256, 2048]; default 1024
   "height": 1216,                                 // optional; multiple of 8 in [256, 2048]; default 1024
+  "checkpoint": "myModel.safetensors",            // optional; base checkpoint override (see below)
   "references": ["<base64-png>"],                 // optional; up to 4 base64 PNGs (see below)
   "referenceStrength": 0.55 }                     // optional; number in (0, 1.5]; default 0.55
 ```
@@ -155,6 +160,20 @@ curl -X POST http://localhost:8189/generate \
   -d '{"prompt":"a stone bridge over a misty gorge","style":"oil painting"}' \
   -o out.png
 ```
+
+#### Base checkpoint override
+
+`checkpoint` selects the base SDXL model for this request, named exactly as ComfyUI lists it
+(see `GET /health` for the installed list). Notes:
+
+- Precedence is **request `checkpoint` > `config.comfyui.checkpoint` > the workflow template's
+  built-in checkpoint**. Omit it to use the configured/default model.
+- Only the **base** checkpoint is overridden. At `quality: "high"` the SDXL **refiner** stays stock
+  (`sd_xl_refiner_1.0.safetensors`); a custom base not paired with that refiner is best used at
+  `fast`/`standard`.
+- Any SDXL checkpoint installed in ComfyUI's `models/checkpoints/` works. The name is validated
+  lightly (non-empty, ≤ 200 chars, no path traversal); ComfyUI is the authority — an **unknown name
+  returns `503`** (rejected workflow), it is not silently swapped.
 
 #### Reference images (IP-Adapter / character consistency)
 
@@ -207,10 +226,16 @@ curl http://localhost:8189/health
 
 ```json
 { "comfyuiReachable": true, "comfyuiUrl": "http://localhost:8188",
-  "lorasLoaded": ["ClassipeintXL2.1.safetensors", "..."] }
+  "lorasLoaded": ["ClassipeintXL2.1.safetensors", "..."],
+  "checkpoint": "sd_xl_base_1.0.safetensors",
+  "checkpoints": ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors", "..."] }
 ```
 
-`lorasLoaded` reports which recipe LoRAs are actually present on the ComfyUI host.
+- `lorasLoaded` — which recipe LoRAs are actually present on the ComfyUI host.
+- `checkpoint` — the **effective default** base checkpoint (config override, else the workflow
+  template's).
+- `checkpoints` — every checkpoint ComfyUI can load, so a client can offer a model picker (the
+  built-in test UI does exactly this).
 
 ## Quality tiers
 
@@ -241,9 +266,10 @@ http://localhost:8189/        # or http://<gpu-box-ip>:8189/ from another machin
 ```
 
 It shows a health line (ComfyUI reachable? how many recipe LoRAs), a style dropdown populated from
-`/styles`, and a form (prompt, negative prompt, style, quality, seed) that POSTs to `/generate` and
-renders the returned PNG with the elapsed time; errors (401/422/503) are shown readably. It's a
-convenience harness only — not a production surface.
+`/styles`, a **Model dropdown** populated from `/health`'s installed-checkpoint list (defaulting to
+the effective checkpoint), and a form (prompt, negative prompt, style, model, quality, seed) that
+POSTs to `/generate` and renders the returned PNG with the elapsed time; errors (401/422/503) are
+shown readably. It's a convenience harness only — not a production surface.
 
 When `auth.enabled` is `true`, paste the token into the page's **Auth token** field: `/styles` and
 `/generate` are gated (the dropdown shows an "enter token" hint until you do), while the page itself
