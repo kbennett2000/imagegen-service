@@ -98,7 +98,7 @@ person each time. If you want a character to **keep the same face across differe
 storybook hero who should look like *themself* on every page — you can hand imagegen-service a
 **reference photo** to guide the resemblance.
 
-![The same character rendered in several different scenes, keeping a consistent face](images/example-reference.svg)
+![The same character rendered in several different scenes, keeping a consistent face](images/example-reference.png)
 
 A few honest things to know:
 
