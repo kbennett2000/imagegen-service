@@ -68,7 +68,8 @@
 </head>
 <body>
   <h1>imagegen-service <span class="devtag">dev / test tool</span></h1>
-  <p class="sub">A throwaway browser harness for exercising <code>POST /generate</code>. Not for production use.</p>
+  <p class="sub">A throwaway browser harness for exercising <code>POST /generate</code> and
+    <code>POST /animate</code>. Not for production use.</p>
 
   <div id="status" class="status">Checking service health…</div>
 
@@ -177,7 +178,73 @@
     <div class="result">
       <div id="meta" class="meta"></div>
       <div id="output"><div class="placeholder">The generated image will appear here.</div></div>
+      <div id="useAs" hidden style="margin-top:.6rem; display:flex; gap:.5rem; flex-wrap:wrap">
+        <button type="button" id="useAsInit" class="linkbtn">↑ Use as Starting image</button>
+        <button type="button" id="useAsRef" class="linkbtn">↑ Use as Reference photo</button>
+      </div>
       <div id="error" class="err" hidden></div>
+    </div>
+  </div>
+
+  <hr style="margin:2.5rem 0 1.25rem; border:none; border-top:1px solid #d1d5db" />
+
+  <h1>Animate a picture <span class="devtag" style="background:#7c3aed">Wan 2.2 · beta</span></h1>
+  <p class="sub">Turn a still into a short video via <code>POST /animate</code>. Renders take
+    <strong>minutes</strong>, and the first one after an image job pauses to swap models on the GPU.</p>
+
+  <div id="animStatus" class="status">Checking video model…</div>
+
+  <div class="layout">
+    <form id="animForm">
+      <div class="imgblock">
+        <label for="animImageFile">Picture to animate <span class="hint">(required)</span></label>
+        <input id="animImageFile" type="file" accept="image/*" />
+        <div id="animImageWrap" hidden>
+          <img id="animImageThumb" class="thumb" alt="picture to animate" />
+          <button type="button" id="animImageClear" class="linkbtn">remove picture</button>
+        </div>
+      </div>
+
+      <label for="animPrompt">Prompt <span class="hint">(required — how it should move)</span></label>
+      <textarea id="animPrompt" placeholder="the scene comes to life, gentle camera push-in"></textarea>
+
+      <label for="animNegative">Negative prompt <span class="hint">(optional)</span></label>
+      <input id="animNegative" type="text" placeholder="" />
+
+      <div class="row">
+        <div>
+          <label for="animFrames">Frames <span class="hint">(1–121)</span></label>
+          <input id="animFrames" type="number" step="4" min="1" max="121" placeholder="121" />
+        </div>
+        <div>
+          <label for="animFps">FPS <span class="hint">(1–120)</span></label>
+          <input id="animFps" type="number" step="1" min="1" max="120" placeholder="24" />
+        </div>
+      </div>
+      <p class="hint" style="margin:.3rem 0 0">121 frames @ 24fps ≈ 5s. Fewer frames = faster render.</p>
+
+      <div class="row">
+        <div>
+          <label for="animWidth">Width <span class="hint">(blank = 1280)</span></label>
+          <input id="animWidth" type="number" step="32" min="256" max="2048" placeholder="1280" />
+        </div>
+        <div>
+          <label for="animHeight">Height <span class="hint">(blank = 704)</span></label>
+          <input id="animHeight" type="number" step="32" min="256" max="2048" placeholder="704" />
+        </div>
+      </div>
+
+      <label for="animSeed">Seed <span class="hint">(blank = random)</span></label>
+      <input id="animSeed" type="number" step="1" placeholder="random" />
+
+      <p class="hint" style="margin:.6rem 0 0">Uses the Auth token field above when auth is enabled.</p>
+      <button id="animGo" type="submit">Animate</button>
+    </form>
+
+    <div class="result">
+      <div id="animMeta" class="meta"></div>
+      <div id="animOutput"><div class="placeholder">The video will appear here.</div></div>
+      <div id="animError" class="err" hidden></div>
     </div>
   </div>
 
@@ -196,6 +263,7 @@
     let currentObjectUrl = null;
     let initImageB64 = null; // img2img starting image
     let refImageB64 = null;  // IP-Adapter reference photo
+    let lastGeneratedBlob = null; // the most recent /generate result, for the "use as…" buttons
 
     // Read a chosen file, downscale to <=1024px on the long edge (keeps SDXL happy + the request
     // small), and return { b64, dataUrl }. b64 is the bare base64 PNG the API expects.
@@ -283,9 +351,31 @@
         }
         populateCheckpoints(h);
         populateUpscale(h);
+        populateAnim(h);
       } catch (e) {
         statusEl.className = "status bad";
         statusEl.textContent = "Could not reach the service /health endpoint: " + e;
+        $("animStatus").className = "status bad";
+        $("animStatus").textContent = "Service /health unreachable — animation unavailable.";
+        $("animGo").disabled = true;
+      }
+    }
+
+    // Reflect image-to-video readiness from /health's `wan` block. Disable Animate (with a clear
+    // reason) until all three Wan model files are present on the ComfyUI host.
+    function populateAnim(h) {
+      const animStatus = $("animStatus");
+      const wan = h && h.wan;
+      if (wan && wan.ready) {
+        animStatus.className = "status ok";
+        animStatus.textContent = "Video model ready (Wan 2.2 TI2V 5B).";
+        $("animGo").disabled = false;
+      } else {
+        animStatus.className = "status bad";
+        const missing = (wan && Array.isArray(wan.missing)) ? wan.missing.join(", ") : "unknown";
+        animStatus.textContent = "Video model NOT installed — run scripts/fetch-wan22-models.ts, " +
+          "then restart ComfyUI. Missing: " + missing;
+        $("animGo").disabled = true;
       }
     }
 
@@ -373,9 +463,35 @@
     $("denoise").addEventListener("input", () => { $("denoiseVal").textContent = $("denoise").value; });
     $("refStrength").addEventListener("input", () => { $("refStrengthVal").textContent = $("refStrength").value; });
 
+    // Reuse the just-generated image as the img2img Starting image or the IP-Adapter Reference photo,
+    // without a save/re-select round trip. Runs the result through the same downscale as a manual pick
+    // so the request stays small, then reveals the matching picker's thumbnail + controls.
+    async function useGeneratedAs(which) {
+      if (!lastGeneratedBlob) return;
+      try {
+        const { b64, dataUrl } = await readScaledPng(lastGeneratedBlob);
+        if (which === "init") {
+          initImageB64 = b64;
+          $("initImageThumb").src = dataUrl;
+          $("initImageWrap").hidden = false;
+          $("initImageFile").scrollIntoView({ behavior: "smooth", block: "center" });
+        } else {
+          refImageB64 = b64;
+          $("refImageThumb").src = dataUrl;
+          $("refImageWrap").hidden = false;
+          $("refImageFile").scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      } catch (e) {
+        showError("Could not reuse the generated image: " + e.message);
+      }
+    }
+    $("useAsInit").addEventListener("click", () => useGeneratedAs("init"));
+    $("useAsRef").addEventListener("click", () => useGeneratedAs("ref"));
+
     $("form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       clearError();
+      $("useAs").hidden = true; // hide until this render succeeds
 
       const prompt = $("prompt").value.trim();
       if (!prompt) { showError("Prompt is required."); return; }
@@ -439,10 +555,99 @@
         img.src = currentObjectUrl;
         img.alt = "generated image";
         outputEl.appendChild(img);
+        lastGeneratedBlob = blob;
+        $("useAs").hidden = false; // enable "use as Starting/Reference image"
         metaEl.textContent = "Done in " + elapsed + "s — " + Math.round(blob.size / 1024) + " KB" +
           (seedRaw !== "" ? " — seed " + seedRaw : " — random seed");
       } catch (e) {
         showError("Request failed: " + e);
+      } finally {
+        go.disabled = false;
+        go.textContent = label;
+      }
+    });
+
+    // ---- Animate (POST /animate) ----------------------------------------------------------
+    let animImageB64 = null;
+    let currentAnimUrl = null;
+    wireImagePicker("animImageFile", "animImageWrap", "animImageThumb", "animImageClear",
+      (b64) => { animImageB64 = b64; });
+
+    const animErrorEl = $("animError");
+    const animMetaEl = $("animMeta");
+    const animOutputEl = $("animOutput");
+    function showAnimError(msg) { animErrorEl.textContent = msg; animErrorEl.hidden = false; }
+    function clearAnimError() { animErrorEl.hidden = true; animErrorEl.textContent = ""; }
+
+    $("animForm").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      clearAnimError();
+
+      if (!animImageB64) { showAnimError("Choose a picture to animate first."); return; }
+      const prompt = $("animPrompt").value.trim();
+      if (!prompt) { showAnimError("Prompt is required."); return; }
+
+      const body = { image: animImageB64, prompt: prompt };
+      const neg = $("animNegative").value.trim();
+      if (neg) body.negativePrompt = neg;
+      const framesRaw = $("animFrames").value.trim();
+      if (framesRaw !== "") body.frames = Number(framesRaw);
+      const fpsRaw = $("animFps").value.trim();
+      if (fpsRaw !== "") body.fps = Number(fpsRaw);
+      const wRaw = $("animWidth").value.trim();
+      if (wRaw !== "") body.width = Number(wRaw);
+      const hRaw = $("animHeight").value.trim();
+      if (hRaw !== "") body.height = Number(hRaw);
+      const seedRaw = $("animSeed").value.trim();
+      if (seedRaw !== "") body.seed = Number(seedRaw);
+
+      const go = $("animGo");
+      go.disabled = true;
+      const label = go.textContent;
+      go.innerHTML = '<span class="spinner"></span>Animating… (this takes minutes)';
+      animMetaEl.textContent = "Submitted — rendering on the GPU. Keep this tab open.";
+      const started = performance.now();
+
+      try {
+        const res = await fetch("/animate", {
+          method: "POST",
+          headers: authHeaders({ "content-type": "application/json" }),
+          body: JSON.stringify(body),
+        });
+        const elapsed = ((performance.now() - started) / 1000).toFixed(1);
+
+        if (!res.ok) {
+          const msg = await errorMessage(res);
+          showAnimError("HTTP " + res.status + " — " + msg);
+          animMetaEl.textContent = "Failed after " + elapsed + "s.";
+          return;
+        }
+
+        const blob = await res.blob();
+        if (currentAnimUrl) URL.revokeObjectURL(currentAnimUrl);
+        currentAnimUrl = URL.createObjectURL(blob);
+        animOutputEl.innerHTML = "";
+        const vid = document.createElement("video");
+        vid.className = "out";
+        vid.src = currentAnimUrl;
+        vid.controls = true;
+        vid.autoplay = true;
+        vid.loop = true;
+        vid.muted = true;
+        vid.style.maxWidth = "100%";
+        animOutputEl.appendChild(vid);
+        const dl = document.createElement("a");
+        dl.href = currentAnimUrl;
+        dl.download = "animated.mp4";
+        dl.textContent = "download mp4";
+        dl.className = "linkbtn";
+        dl.style.display = "inline-block";
+        dl.style.marginTop = ".5rem";
+        animOutputEl.appendChild(dl);
+        animMetaEl.textContent = "Done in " + elapsed + "s — " + Math.round(blob.size / 1024) + " KB" +
+          (seedRaw !== "" ? " — seed " + seedRaw : " — random seed");
+      } catch (e) {
+        showAnimError("Request failed: " + e);
       } finally {
         go.disabled = false;
         go.textContent = label;
