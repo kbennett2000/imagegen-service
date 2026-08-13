@@ -8,15 +8,22 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 
 import type { Config } from "./config.js";
 import {
+  animateImage,
   DEFAULT_CHECKPOINT,
   generateImage,
   probeComfy,
   QUALITIES,
+  wanModelsMissing,
+  type AnimateParams,
   type FetchFn,
   type GenerateParams,
   type Quality,
 } from "./engine.js";
 import { STYLE_LORAS } from "./style-loras.js";
+import { MAX_FRAMES } from "./wan-workflow.js";
+
+// CreateVideo caps fps at 120.
+const MAX_FPS = 120;
 
 // Generous cap. Raised from 1 MB to accommodate base64 reference images (a 1024² portrait PNG is
 // ~1.5 MB raw → ~2 MB base64); a few references still fit comfortably.
@@ -40,6 +47,11 @@ function sendHtml(res: ServerResponse, html: string): void {
 
 function sendPng(res: ServerResponse, bytes: Buffer): void {
   res.writeHead(200, { "content-type": "image/png", "content-length": String(bytes.length) });
+  res.end(bytes);
+}
+
+function sendBytes(res: ServerResponse, bytes: Buffer, contentType: string): void {
+  res.writeHead(200, { "content-type": contentType, "content-length": String(bytes.length) });
   res.end(bytes);
 }
 
@@ -169,6 +181,60 @@ function parseGenerateBody(raw: string): { params: GenerateParams } | { error: s
   return { params };
 }
 
+// Validate + normalize the /animate body (ADR-0009). `image` + `prompt` are required; the rest are
+// optional and default per ADR-0008. Boundaries are lenient — the engine (renderWanWorkflow) owns the
+// multiple-of-32 / 4k+1 grid snapping, so this only rejects the out-of-range and wrong-type cases.
+function parseAnimateBody(raw: string): { params: AnimateParams } | { error: string } {
+  let body: unknown;
+  try {
+    body = raw.trim() ? JSON.parse(raw) : {};
+  } catch {
+    return { error: "request body is not valid JSON" };
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { error: "request body must be a JSON object" };
+  }
+  const b = body as Record<string, unknown>;
+
+  if (typeof b.prompt !== "string" || b.prompt.trim() === "") {
+    return { error: "`prompt` is required and must be a non-empty string" };
+  }
+  if (typeof b.image !== "string" || b.image === "") {
+    return { error: "`image` is required and must be a non-empty base64 string" };
+  }
+  if (b.negativePrompt !== undefined && typeof b.negativePrompt !== "string") {
+    return { error: "`negativePrompt` must be a string" };
+  }
+  if (b.seed !== undefined && (typeof b.seed !== "number" || !Number.isFinite(b.seed))) {
+    return { error: "`seed` must be a finite number" };
+  }
+  for (const name of ["width", "height"] as const) {
+    const err = videoDimensionError(name, b[name]);
+    if (err) return { error: err };
+  }
+  if (
+    b.frames !== undefined &&
+    (typeof b.frames !== "number" || !Number.isInteger(b.frames) || b.frames < 1 || b.frames > MAX_FRAMES)
+  ) {
+    return { error: `\`frames\` must be an integer in [1, ${MAX_FRAMES}]` };
+  }
+  if (
+    b.fps !== undefined &&
+    (typeof b.fps !== "number" || !Number.isFinite(b.fps) || b.fps < 1 || b.fps > MAX_FPS)
+  ) {
+    return { error: `\`fps\` must be a number in [1, ${MAX_FPS}]` };
+  }
+
+  const params: AnimateParams = { prompt: b.prompt, image: b.image };
+  if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
+  if (typeof b.seed === "number") params.seed = b.seed;
+  if (typeof b.width === "number") params.width = b.width;
+  if (typeof b.height === "number") params.height = b.height;
+  if (typeof b.frames === "number") params.frames = b.frames;
+  if (typeof b.fps === "number") params.fps = b.fps;
+  return { params };
+}
+
 // A checkpoint override is a ComfyUI ckpt_name (may include a forward-slash subfolder). We keep
 // validation light — ComfyUI is the authority on which names exist — but reject the obviously
 // unsafe/empty shapes: non-strings, empty/whitespace, overlong, path traversal, backslashes, NUL,
@@ -215,6 +281,22 @@ function dimensionError(name: string, value: unknown): string | null {
     value % 8 !== 0
   ) {
     return `\`${name}\` must be an integer multiple of 8 in [${MIN_DIMENSION}, ${MAX_DIMENSION}]`;
+  }
+  return null;
+}
+
+// Video (Wan) dimensions: a positive integer in a sane range. Unlike SDXL's multiple-of-8 rule, the
+// engine snaps these to Wan's multiple-of-32 grid, so the boundary check stays lenient. Returns an
+// error string for a 422, or null when absent (default kept) or valid.
+function videoDimensionError(name: string, value: unknown): string | null {
+  if (value === undefined) return null;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < MIN_DIMENSION ||
+    value > MAX_DIMENSION
+  ) {
+    return `\`${name}\` must be an integer in [${MIN_DIMENSION}, ${MAX_DIMENSION}]`;
   }
   return null;
 }
@@ -278,6 +360,33 @@ async function handleGenerate(
   }
 }
 
+async function handleAnimate(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: Config,
+  fetchFn: FetchFn,
+): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readBody(req);
+  } catch {
+    sendJson(res, 422, { error: "could not read request body" });
+    return;
+  }
+  const parsed = parseAnimateBody(raw);
+  if ("error" in parsed) {
+    sendJson(res, 422, { error: parsed.error });
+    return;
+  }
+  const result = await animateImage(config.comfyui.url, parsed.params, fetchFn);
+  if (result.ok) {
+    sendBytes(res, result.bytes, result.contentType);
+  } else {
+    // All engine failures are ComfyUI-side (unreachable / missing Wan models / timeout / rejected).
+    sendJson(res, 503, { error: result.error });
+  }
+}
+
 function handleStyles(res: ServerResponse): void {
   const styles = Object.entries(STYLE_LORAS).map(([name, recipe]) => ({
     name,
@@ -302,6 +411,10 @@ async function handleHealth(res: ServerResponse, config: Config, fetchFn: FetchF
   const checkpoint = config.comfyui.checkpoint || DEFAULT_CHECKPOINT;
   // Effective default upscale model (config override, else the first installed) + the full list.
   const upscaleModel = config.comfyui.upscaleModel || upscaleModels[0] || "";
+  // Image-to-video readiness (ADR-0009): which of the three Wan 2.2 files are present. Best-effort —
+  // when ComfyUI is unreachable all three read as missing and `ready` is false. Skipped entirely when
+  // unreachable to avoid three doomed probes.
+  const wanMissing = reachable ? await wanModelsMissing(config.comfyui.url, fetchFn) : ["comfyui-unreachable"];
   sendJson(res, 200, {
     comfyuiReachable: reachable,
     comfyuiUrl: config.comfyui.url,
@@ -310,6 +423,7 @@ async function handleHealth(res: ServerResponse, config: Config, fetchFn: FetchF
     checkpoints,
     upscaleModel,
     upscaleModels,
+    wan: { ready: wanMissing.length === 0, missing: wanMissing },
   });
 }
 
@@ -333,6 +447,14 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch): Server {
             return;
           }
           await handleGenerate(req, res, config, fetchFn);
+          return;
+        }
+        if (method === "POST" && url === "/animate") {
+          if (!isAuthorized(req, config)) {
+            sendJson(res, 401, { error: "unauthorized" });
+            return;
+          }
+          await handleAnimate(req, res, config, fetchFn);
           return;
         }
         if (method === "GET" && url === "/styles") {

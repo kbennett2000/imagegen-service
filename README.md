@@ -122,15 +122,17 @@ npm run test:unit  # CI-safe; mocks ComfyUI, no GPU needed
 
 ## Experimental: animate an image (Wan 2.2)
 
-Work in progress — a **foundation** for turning a still into a short video with
+Turn a still into a short video with
 [Wan 2.2 TI2V 5B](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged) running through the
-same ComfyUI instance (ADR-[0008](docs/adr/0008-image-to-video-wan22.md)). There is **no service
-endpoint yet** — that lands in a later cycle. For now the pipeline is proven with two scripts.
+same ComfyUI instance (ADR-[0008](docs/adr/0008-image-to-video-wan22.md)/[0009](docs/adr/0009-animate-endpoint.md)).
+Served by **`POST /animate`** (still image + prompt in → mp4 out); see the
+[developer reference](docs/developer-reference.md#post-animate--videomp4).
 
 The 5B model fits the 12 GB card with no quantization tricks, but note SDXL and Wan **swap in and out
-of the GPU**, so the first video job after an image job (or vice-versa) pauses to load the model.
+of the GPU**, so the first video job after an image job (or vice-versa) pauses to load the model, and
+a render takes minutes.
 
-Run these on the ComfyUI box, in order:
+**One-time setup** on the ComfyUI box:
 
 ```bash
 # 1. Update ComfyUI first — the Wan 2.2 nodes require a current build.
@@ -141,18 +143,19 @@ cd ~/comfyui && git pull                     # (however you normally update Comf
 cd ~/Desktop/projects/imagegen-service
 npx tsx scripts/fetch-wan22-models.ts
 #    ...then restart ComfyUI so it re-scans its models directory.
-
-# 3. Smoke-test the pipeline on a still image (bypasses the service, talks to ComfyUI directly).
-npx tsx scripts/smoke-wan22.ts \
-  --image path/to/still.png \
-  --prompt "the scene comes to life, gentle camera push-in" \
-  --frames 121 --size 1280x704 \
-  --out animated.mp4
 ```
 
-The smoke script fails loudly if ComfyUI is unreachable or any model file is missing; on success it
-prints the elapsed render time and the output video path. `--frames` (capped at 121 = 5 s @ 24 fps)
-and `--size` are optional.
+Then animate through the service (check `GET /health`'s `wan.ready` first):
+
+```bash
+curl -X POST http://localhost:8189/animate \
+  -H 'content-type: application/json' \
+  -d '{"image":"'"$(base64 -w0 still.png)"'","prompt":"the scene comes to life, gentle camera push-in"}' \
+  --output animated.mp4
+```
+
+There is also a standalone **`scripts/smoke-wan22.ts`** that submits to ComfyUI directly (bypassing the
+service) for pipeline debugging — it fails loudly if ComfyUI is unreachable or a model is missing.
 
 ## License
 
