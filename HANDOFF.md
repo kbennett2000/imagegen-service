@@ -1,7 +1,41 @@
 # Handoff
 
 ## Current state
-**Wan 2.2 image-to-video foundation (ADR-0008, PR open for review).** Cycle 1 of 2 — proves the
+**POST /animate — Wan 2.2 image-to-video endpoint (ADR-0009, PR open for review).** Cycle 2 of 2.
+Exposes the ADR-0008 pipeline through the service: a still + prompt in → mp4 bytes out. **`generateImage`,
+the SDXL templates, and the `/generate` path are untouched** — the video path is purely additive.
+
+- **Endpoint** `POST /animate` (auth-gated like `/generate`): JSON `{ image (base64, required), prompt
+  (required), negativePrompt?, seed?, width?, height?, frames?, fps? }` → `video/mp4` (200/422/503).
+  `parseAnimateBody` validates (frames `[1,121]`, fps `[1,120]`, dims `[256,2048]` int); the engine
+  owns the ×32 / 4k+1 snapping. `sendBytes` returns the video with its derived content-type.
+- **Engine** `animateImage` (in `src/engine.ts`, beside `generateImage`, reusing its transport):
+  preflight `wanModelsMissing` (hard fail → 503 with the exact files to fetch, since animation can't
+  degrade), upload still, `renderWanWorkflow`, POST /prompt → poll by own prompt_id → /view. **20-min
+  poll budget** (`ANIMATE_TIMEOUT_MS`) absorbs the render + the SDXL↔Wan model-load pause; longer /view
+  timeout for the multi-MB mp4. Generalized `findOutputFile` (SaveVideo's output key varies by build)
+  + `contentTypeFor`. Refactored the three `listX` probes onto a shared `objectInfoOptions`.
+- **/health** gained `wan: { ready, missing }` (best-effort; skipped when ComfyUI unreachable).
+- **Tests:** `npm run test:unit` → **101 pass** (89 prior + 12 new: animate happy-path/param-flow/
+  missing-models/exec-error, wanModelsMissing, and server 200/422×2/503/401→200/health). MockComfy now
+  advertises the Wan loaders (UNETLoader/CLIPLoader/VAELoader, defaults present, settable empty) + an
+  `outputFilename` override for the video content-type path. `process.env` still absent from `src/`.
+- **Verified live against real ComfyUI** (models NOT downloaded on this box): ran the updated server on
+  an ephemeral port (the systemd instance on :8189 still runs old code — see below). `/health` →
+  `wan.ready:false` listing all three missing files; `POST /animate` → **503** with the actionable
+  message; missing-image → **422**. Correct, honest, no fabricated render.
+- **⚠️ The running service on :8189 is a systemd unit (`imagegen-service.service`, enabled) serving the
+  repo working tree, still on OLD code.** Restarting it needs sudo, which the headless cycle lacks
+  (`sudo -n` → "interactive authentication required"). To pick up this branch after merge, a human runs:
+  `sudo systemctl restart imagegen-service`. (No code change needed — it runs `tsx src/index.ts` from
+  the working tree.)
+- **To actually render video:** update ComfyUI → `npx tsx scripts/fetch-wan22-models.ts` → restart
+  ComfyUI → `POST /animate` (or `scripts/smoke-wan22.ts` to bypass the service).
+- **Future:** 14B-GGUF as a higher-quality tier (ADR-0008); an async job API only if concurrent/batch
+  animation becomes real (ADR-0009 chose synchronous to match `/generate`).
+
+### Prior — Wan 2.2 image-to-video foundation (ADR-0008, merged PR #21)
+Cycle 1 of 2 — proves the
 image-to-video pipeline OUTSIDE the service before Cycle 2 adds a `POST /animate` endpoint. **No
 existing endpoint, SDXL template, or engine path changed.**
 

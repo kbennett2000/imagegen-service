@@ -8,6 +8,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ensureTrigger, lookupStyleLora, type StyleLora } from "./style-loras.js";
+import {
+  renderWanWorkflow,
+  WAN_DIFFUSION_MODEL,
+  WAN_TEXT_ENCODER,
+  WAN_VAE,
+} from "./wan-workflow.js";
 
 // fetch is dependency-injected so tests drive the whole HTTP flow with no GPU / no ComfyUI.
 export type FetchFn = typeof fetch;
@@ -79,6 +85,30 @@ const UPSCALE_TIMEOUT_BONUS_MS = 60_000;
 export type GenerateResult =
   | { ok: true; bytes: Buffer }
   | { ok: false; error: string };
+
+// Image-to-video (ADR-0009). `image` is the base64 still to animate; the rest default per ADR-0008
+// (1280x704, 24fps, 121 frames). Validated by the server before it reaches here.
+export interface AnimateParams {
+  prompt: string;
+  image: string; // base64 still to animate (required)
+  negativePrompt?: string;
+  seed?: number;
+  width?: number;
+  height?: number;
+  frames?: number;
+  fps?: number;
+}
+
+export type AnimateResult =
+  | { ok: true; bytes: Buffer; contentType: string; filename: string }
+  | { ok: false; error: string };
+
+// A 121-frame 5B render takes minutes, and the FIRST animation after an image job also pays the
+// one-time SDXL<->Wan model-load pause as the 12GB card swaps model sets (ADR-0008). Budget well
+// above the image tiers' 2-5 min.
+const ANIMATE_TIMEOUT_MS = 20 * 60_000;
+// Downloading the finished mp4 (multi-MB) can exceed the 30s per-request budget the image path uses.
+const VIEW_TIMEOUT_MS = 120_000;
 
 const WORKFLOWS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "workflows");
 const BASE_WORKFLOW = "sdxl-txt2img.json";
@@ -312,19 +342,47 @@ export function comboOptions(def: unknown): string[] {
   return [];
 }
 
-// Query ComfyUI's own filesystem for the LoRAs it can load. Used by /health and by the
-// per-request availability check. Returns [] on any failure.
-export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[]> {
+// Read the option list of one combo input on one ComfyUI node class (e.g. LoraLoader.lora_name).
+// The shared primitive behind every "what can ComfyUI load?" probe. Returns [] on any failure so a
+// probe never throws into a request handler.
+async function objectInfoOptions(
+  base: string,
+  fetchFn: FetchFn,
+  cls: string,
+  input: string,
+): Promise<string[]> {
   try {
-    const res = await fetchFn(`${base}/object_info/LoraLoader`, {
+    const res = await fetchFn(`${base}/object_info/${cls}`, {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!res.ok) return [];
     const info = (await res.json().catch(() => ({}))) as Record<string, any>;
-    return comboOptions(info?.LoraLoader?.input?.required?.lora_name);
+    return comboOptions(info?.[cls]?.input?.required?.[input]);
   } catch {
     return [];
   }
+}
+
+// Query ComfyUI's own filesystem for the LoRAs it can load. Used by /health and by the
+// per-request availability check. Returns [] on any failure.
+export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[]> {
+  return objectInfoOptions(base, fetchFn, "LoraLoader", "lora_name");
+}
+
+// Which of the three Wan 2.2 model files (ADR-0008) are NOT advertised by ComfyUI. [] => all present
+// and animation can run; a non-empty list is exactly what to fetch. Returns all three as missing when
+// ComfyUI is unreachable (each probe returns []).
+export async function wanModelsMissing(base: string, fetchFn: FetchFn): Promise<string[]> {
+  const [unets, clips, vaes] = await Promise.all([
+    objectInfoOptions(base, fetchFn, "UNETLoader", "unet_name"),
+    objectInfoOptions(base, fetchFn, "CLIPLoader", "clip_name"),
+    objectInfoOptions(base, fetchFn, "VAELoader", "vae_name"),
+  ]);
+  const missing: string[] = [];
+  if (!unets.includes(WAN_DIFFUSION_MODEL)) missing.push(`diffusion_models/${WAN_DIFFUSION_MODEL}`);
+  if (!clips.includes(WAN_TEXT_ENCODER)) missing.push(`text_encoders/${WAN_TEXT_ENCODER}`);
+  if (!vaes.includes(WAN_VAE)) missing.push(`vae/${WAN_VAE}`);
+  return missing;
 }
 
 async function loraAvailable(base: string, fetchFn: FetchFn, loraFile: string): Promise<boolean> {
@@ -413,30 +471,12 @@ export async function probeComfy(
 
 // The checkpoints ComfyUI can load (CheckpointLoaderSimple.ckpt_name). Returns [] on any failure.
 export async function listCheckpoints(base: string, fetchFn: FetchFn): Promise<string[]> {
-  try {
-    const res = await fetchFn(`${base}/object_info/CheckpointLoaderSimple`, {
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!res.ok) return [];
-    const info = (await res.json().catch(() => ({}))) as Record<string, any>;
-    return comboOptions(info?.CheckpointLoaderSimple?.input?.required?.ckpt_name);
-  } catch {
-    return [];
-  }
+  return objectInfoOptions(base, fetchFn, "CheckpointLoaderSimple", "ckpt_name");
 }
 
 // The upscale models ComfyUI can load (UpscaleModelLoader.model_name). Returns [] on any failure.
 export async function listUpscaleModels(base: string, fetchFn: FetchFn): Promise<string[]> {
-  try {
-    const res = await fetchFn(`${base}/object_info/UpscaleModelLoader`, {
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!res.ok) return [];
-    const info = (await res.json().catch(() => ({}))) as Record<string, any>;
-    return comboOptions(info?.UpscaleModelLoader?.input?.required?.model_name);
-  } catch {
-    return [];
-  }
+  return objectInfoOptions(base, fetchFn, "UpscaleModelLoader", "model_name");
 }
 
 interface OutImage {
@@ -627,6 +667,139 @@ export async function generateImage(
     if (!view.ok) return { ok: false, error: `ComfyUI /view returned ${view.status}` };
     const bytes = Buffer.from(await view.arrayBuffer());
     return { ok: true, bytes };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `ComfyUI request failed: ${reason}` };
+  }
+}
+
+// Scan a /history entry's outputs for the first produced file. Wan ends in SaveVideo, whose output
+// key varies by ComfyUI build (images / gifs / videos), so take the first output array whose first
+// element carries a `filename` rather than assuming an `images` array under a fixed node id.
+function findOutputFile(entry: any): OutImage | undefined {
+  for (const nodeOut of Object.values(entry?.outputs ?? {}) as any[]) {
+    for (const val of Object.values(nodeOut ?? {})) {
+      if (Array.isArray(val)) {
+        const first = val.find((x) => x && typeof x === "object" && "filename" in x);
+        if (first) return first as OutImage;
+      }
+    }
+  }
+  return undefined;
+}
+
+// Map an output filename's extension to a response content type. Wan's SaveVideo writes mp4; the
+// other extensions cover alternate ComfyUI video/animation save nodes.
+function contentTypeFor(filename: string): string {
+  const f = filename.toLowerCase();
+  if (f.endsWith(".mp4")) return "video/mp4";
+  if (f.endsWith(".webm")) return "video/webm";
+  if (f.endsWith(".webp")) return "image/webp";
+  if (f.endsWith(".gif")) return "image/gif";
+  if (f.endsWith(".png")) return "image/png";
+  return "application/octet-stream";
+}
+
+// ---- image-to-video entry (ADR-0009) -----------------------------------------------------
+
+// animateImage — turn a still into a short video with Wan 2.2 TI2V 5B. Parallels generateImage: same
+// POST /prompt -> poll /history BY OWN prompt_id -> /view transport, same never-throw discipline. The
+// image path (generateImage) is untouched. Two differences: a hard preflight on the Wan model files
+// (animation cannot degrade to prompt-only), and a video-tier timeout that absorbs the model-load
+// pause (ADR-0008).
+export async function animateImage(
+  comfyUrl: string,
+  params: AnimateParams,
+  fetchFn: FetchFn = fetch,
+): Promise<AnimateResult> {
+  const base = comfyBase(comfyUrl);
+  try {
+    // Preflight: the three Wan files must be installed. Fail cleanly and actionably if not — unlike
+    // the IP-Adapter path, there is no meaningful render without them.
+    const missing = await wanModelsMissing(base, fetchFn);
+    if (missing.length) {
+      return {
+        ok: false,
+        error: `Wan 2.2 model files not installed on the ComfyUI host: ${missing.join(", ")} — run scripts/fetch-wan22-models.ts, then restart ComfyUI`,
+      };
+    }
+
+    // Upload the still. A failure here is NOT swallowed (like img2img): without the input image there
+    // is nothing to animate, so the whole request fails.
+    let imageName: string;
+    try {
+      imageName = await uploadImage(base, fetchFn, params.image);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: `input image upload failed: ${reason}` };
+    }
+
+    const graph = renderWanWorkflow({
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      seed: params.seed,
+      width: params.width,
+      height: params.height,
+      frames: params.frames,
+      fps: params.fps,
+      imageName,
+    });
+
+    const clientId = `imagegen-${randomSeed().toString(16)}`;
+    const res = await fetchFn(`${base}/prompt`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: graph, client_id: clientId }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, error: `ComfyUI /prompt returned ${res.status} ${body.slice(0, 200)}` };
+    }
+    const submit = (await res.json()) as {
+      prompt_id?: string;
+      node_errors?: Record<string, unknown>;
+    };
+    if (submit.node_errors && Object.keys(submit.node_errors).length) {
+      return {
+        ok: false,
+        error: `ComfyUI rejected the workflow: ${JSON.stringify(submit.node_errors).slice(0, 300)}`,
+      };
+    }
+    if (!submit.prompt_id) return { ok: false, error: "ComfyUI /prompt returned no prompt_id" };
+    const promptId = submit.prompt_id;
+
+    // Poll /history/<promptId> by our OWN id (the concurrency guarantee). Video-tier budget.
+    const deadline = Date.now() + ANIMATE_TIMEOUT_MS;
+    let out: OutImage | undefined;
+    while (Date.now() < deadline) {
+      await sleep(POLL_INTERVAL_MS);
+      const h = await fetchFn(`${base}/history/${promptId}`, {
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }).catch(() => null);
+      if (!h || !h.ok) continue;
+      const hist = (await h.json().catch(() => ({}))) as Record<string, any>;
+      const entry = hist[promptId];
+      if (!entry) continue;
+      if (entry.status?.status_str === "error") {
+        return {
+          ok: false,
+          error: `ComfyUI execution error: ${JSON.stringify(entry.status).slice(0, 300)}`,
+        };
+      }
+      out = findOutputFile(entry);
+      if (out) break;
+    }
+    if (!out) return { ok: false, error: `ComfyUI produced no video within ${ANIMATE_TIMEOUT_MS}ms` };
+
+    // Fetch the video bytes via /view (longer per-request budget than the image path).
+    const q = new URLSearchParams({ filename: out.filename, subfolder: out.subfolder, type: out.type });
+    const view = await fetchFn(`${base}/view?${q}`, {
+      signal: AbortSignal.timeout(VIEW_TIMEOUT_MS),
+    });
+    if (!view.ok) return { ok: false, error: `ComfyUI /view returned ${view.status}` };
+    const bytes = Buffer.from(await view.arrayBuffer());
+    return { ok: true, bytes, contentType: contentTypeFor(out.filename), filename: out.filename };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return { ok: false, error: `ComfyUI request failed: ${reason}` };
