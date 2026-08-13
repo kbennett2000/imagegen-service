@@ -1,6 +1,42 @@
 # Handoff
 
 ## Current state
+**Wan 2.2 image-to-video foundation (ADR-0008, PR open for review).** Cycle 1 of 2 — proves the
+image-to-video pipeline OUTSIDE the service before Cycle 2 adds a `POST /animate` endpoint. **No
+existing endpoint, SDXL template, or engine path changed.**
+
+- **Model: Wan 2.2 TI2V 5B.** Correction to the cycle brief: the 5B ships **fp16-only**
+  (`wan2.2_ti2v_5B_fp16.safetensors`, ~10 GB) — there is **no fp8 5B** in the official Comfy-Org
+  repo; fp8_scaled variants are all 14B. The fp16 5B is exactly what fits 12 GB with no quant tricks,
+  so the pin is correct and the ADR records the discrepancy. 14B-GGUF noted as a future quality tier.
+- **`scripts/fetch-wan22-models.ts`** — idempotent download (skip-by-exact-size) of the three files
+  into a `--models-root` (default `~/comfyui/models`): the 5B diffusion model, `wan2.2_vae.safetensors`,
+  and `umt5_xxl_fp8_e4m3fn_scaled.safetensors`. Sizes verified against HF. `--dry-run` supported.
+  Transfers via `curl -L -f -C -` (resume). Pure `planDownloads` is unit-tested with a mocked stat.
+- **`src/workflows/wan22-ti2v-5b-i2v.json`** + **`src/wan-workflow.ts`** (`renderWanWorkflow`) — the
+  Wan graph parameterized BY NODE ID like SDXL, pure clone-per-call. UNETLoader"37"→ModelSamplingSD3
+  "48"(shift 8)→KSampler"3"(euler/simple, cfg5, steps30); CLIPLoader"38"(type wan); LoadImage"52"→
+  **ImageScale"53"**(scales arbitrary input to target res)→Wan22ImageToVideoLatent"55"→VAEDecode"8"→
+  CreateVideo"57"→SaveVideo"58"(mp4). Defaults **1280×704, 24fps, 121-frame cap** (frames snapped to
+  the 4k+1 grid, dims to mult-of-32).
+- **`scripts/smoke-wan22.ts`** — `--image`/`--prompt`/`--frames`/`--size`; uploads, renders, submits
+  DIRECTLY to ComfyUI (bypassing the service), polls by own prompt_id, writes the mp4, prints elapsed
+  + path. Fails loudly if ComfyUI is unreachable or any of the three models isn't advertised by
+  `/object_info`. Never fabricates success.
+- **Verified live on this box (ComfyUI reachable, Wan nodes present):** the smoke script was run and
+  **failed loudly and correctly** — the ~18 GB of Wan models are NOT downloaded on this box, so it
+  reported the three missing files + pointed at the fetch script (exit 1). The fetch script `--dry-run`
+  printed the correct URLs/destinations. **A full render was not possible without downloading the
+  models** (a documented manual step); no video was fabricated.
+- **Tests:** `npm run test:unit` → **89 pass** (76 prior + 13 new: template injection incl.
+  scaler-feeds-latent, frame/dim snapping, negative-append, fresh-clone; + fetch skip/redownload/mixed
+  logic with mocked stat). `process.env` still absent from `src/`.
+- **Next cycle (Cycle 2):** `POST /animate` endpoint reusing `renderWanWorkflow`. Needs a **video-tier
+  timeout** (minutes) that also absorbs the **SDXL↔Wan model-load pause** on the first job after a job-
+  type flip (both share the 12 GB card; see ADR-0008 Consequences). To actually render: update ComfyUI,
+  run `scripts/fetch-wan22-models.ts`, restart ComfyUI, then `scripts/smoke-wan22.ts`.
+
+### Prior — IP-Adapter conditions identity, not composition (ADR-0007)
 **IP-Adapter conditions identity, not composition (ADR-0007, PR open for review).** `applyIPAdapter` injected the
 reference across the *entire* denoising schedule (`start_at: 0.0`) and fed `plus-face` an
 **uncropped** bust. Both are wrong for a face adapter, and a downstream caller found out expensively:
