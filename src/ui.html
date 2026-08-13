@@ -181,6 +181,7 @@
       <div id="useAs" hidden style="margin-top:.6rem; display:flex; gap:.5rem; flex-wrap:wrap">
         <button type="button" id="useAsInit" class="linkbtn">↑ Use as Starting image</button>
         <button type="button" id="useAsRef" class="linkbtn">↑ Use as Reference photo</button>
+        <button type="button" id="useAsAnim" class="linkbtn">🎬 Use for video render</button>
       </div>
       <div id="error" class="err" hidden></div>
     </div>
@@ -475,6 +476,11 @@
           $("initImageThumb").src = dataUrl;
           $("initImageWrap").hidden = false;
           $("initImageFile").scrollIntoView({ behavior: "smooth", block: "center" });
+        } else if (which === "anim") {
+          animImageB64 = b64;
+          $("animImageThumb").src = dataUrl;
+          $("animImageWrap").hidden = false;
+          $("animForm").scrollIntoView({ behavior: "smooth", block: "center" });
         } else {
           refImageB64 = b64;
           $("refImageThumb").src = dataUrl;
@@ -487,6 +493,7 @@
     }
     $("useAsInit").addEventListener("click", () => useGeneratedAs("init"));
     $("useAsRef").addEventListener("click", () => useGeneratedAs("ref"));
+    $("useAsAnim").addEventListener("click", () => useGeneratedAs("anim"));
 
     $("form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
