@@ -586,6 +586,51 @@
     function showAnimError(msg) { animErrorEl.textContent = msg; animErrorEl.hidden = false; }
     function clearAnimError() { animErrorEl.hidden = true; animErrorEl.textContent = ""; }
 
+    // Grab the last frame of a rendered mp4 as a PNG, fully client-side: decode the blob in an
+    // offscreen <video>, seek to the end, and draw that frame to a canvas. Same-origin blob URL, so
+    // the canvas isn't tainted and toDataURL works. Returns { b64, dataUrl } like readScaledPng.
+    function lastFrameOf(blob) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(blob);
+        const v = document.createElement("video");
+        v.muted = true; v.preload = "auto"; v.src = url;
+        const fail = (msg) => { URL.revokeObjectURL(url); reject(new Error(msg)); };
+        v.addEventListener("error", () => fail("could not decode the video"), { once: true });
+        v.addEventListener("loadeddata", () => {
+          const dur = isFinite(v.duration) ? v.duration : 0;
+          // Nudge just shy of the end — seeking exactly to duration can land past the last frame.
+          v.addEventListener("seeked", () => {
+            try {
+              const cv = document.createElement("canvas");
+              cv.width = v.videoWidth; cv.height = v.videoHeight;
+              cv.getContext("2d").drawImage(v, 0, 0);
+              const dataUrl = cv.toDataURL("image/png");
+              URL.revokeObjectURL(url);
+              resolve({ b64: dataUrl.split(",")[1], dataUrl });
+            } catch (e) { fail(e.message || String(e)); }
+          }, { once: true });
+          v.currentTime = Math.max(0, dur - 0.05);
+        }, { once: true });
+      });
+    }
+
+    // Chain videos: load the just-rendered clip's last frame into the Animate picker as the new
+    // starting picture, so the next render continues from where this one ended.
+    async function continueFromLastFrame(blob) {
+      clearAnimError();
+      try {
+        const { b64, dataUrl } = await lastFrameOf(blob);
+        animImageB64 = b64;
+        $("animImageThumb").src = dataUrl;
+        $("animImageWrap").hidden = false;
+        $("animImageFile").scrollIntoView({ behavior: "smooth", block: "center" });
+        animMetaEl.textContent =
+          "Loaded the last frame as the new starting picture — set a prompt and Animate again to continue.";
+      } catch (e) {
+        showAnimError("Could not read the last frame: " + e.message);
+      }
+    }
+
     $("animForm").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       clearAnimError();
@@ -651,6 +696,14 @@
         dl.style.display = "inline-block";
         dl.style.marginTop = ".5rem";
         animOutputEl.appendChild(dl);
+        const cont = document.createElement("button");
+        cont.type = "button";
+        cont.className = "linkbtn";
+        cont.textContent = "🎞️ Continue from last frame";
+        cont.style.display = "inline-block";
+        cont.style.margin = ".5rem 0 0 .5rem";
+        cont.addEventListener("click", () => continueFromLastFrame(blob));
+        animOutputEl.appendChild(cont);
         animMetaEl.textContent = "Done in " + elapsed + "s — " + Math.round(blob.size / 1024) + " KB" +
           (seedRaw !== "" ? " — seed " + seedRaw : " — random seed");
       } catch (e) {
