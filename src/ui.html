@@ -199,7 +199,7 @@
     <form id="animForm">
       <div class="imgblock">
         <label for="animImageFile">Picture to animate <span class="hint">(required)</span></label>
-        <input id="animImageFile" type="file" accept="image/*" />
+        <input id="animImageFile" type="file" accept="image/*,video/*" />
         <div id="animImageWrap" hidden>
           <img id="animImageThumb" class="thumb" alt="picture to animate" />
           <button type="button" id="animImageClear" class="linkbtn">remove picture</button>
@@ -310,17 +310,22 @@
     }
 
     // Wire a file input <-> thumbnail/clear pair; onSet(b64) stores it, returns a reset fn.
-    function wireImagePicker(fileId, wrapId, thumbId, clearId, onSet) {
+    function wireImagePicker(fileId, wrapId, thumbId, clearId, onSet, opts = {}) {
       const reset = () => { onSet(null); $(wrapId).hidden = true; $(fileId).value = ""; };
       $(fileId).addEventListener("change", async () => {
         const file = $(fileId).files[0];
         if (!file) { reset(); return; }
         try {
-          const { b64, dataUrl } = await readScaledPng(file);
+          // When video is allowed and a video is picked, build from its very last frame.
+          const isVideo = opts.acceptVideo && file.type.startsWith("video/");
+          const { b64, dataUrl } = isVideo ? await lastFrameOf(file) : await readScaledPng(file);
           onSet(b64);
           $(thumbId).src = dataUrl;
           $(wrapId).hidden = false;
-        } catch (e) { showError("Could not load image: " + e.message); reset(); }
+        } catch (e) {
+          showError((opts.acceptVideo ? "Could not load image/video: " : "Could not load image: ") + e.message);
+          reset();
+        }
       });
       $(clearId).addEventListener("click", reset);
       return reset;
@@ -597,7 +602,7 @@
     let animImageB64 = null;
     let currentAnimUrl = null;
     wireImagePicker("animImageFile", "animImageWrap", "animImageThumb", "animImageClear",
-      (b64) => { animImageB64 = b64; });
+      (b64) => { animImageB64 = b64; }, { acceptVideo: true });
 
     const animErrorEl = $("animError");
     const animMetaEl = $("animMeta");
