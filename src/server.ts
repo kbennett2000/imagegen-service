@@ -1,6 +1,6 @@
-// HTTP layer: Node built-in http server, no web framework. Three routes — POST /generate,
-// GET /styles, GET /health. Handlers NEVER throw and NEVER leak a stack: every failure returns
-// a JSON error body with an appropriate status.
+// HTTP layer: Node built-in http server, no web framework. Routes — POST /generate, POST /animate,
+// POST /stitch, GET /styles, GET /health (+ the dev UI at GET /). Handlers NEVER throw and NEVER leak
+// a stack: every failure returns a JSON error body with an appropriate status.
 
 import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -20,6 +20,7 @@ import {
   type Quality,
 } from "./engine.js";
 import { STYLE_LORAS } from "./style-loras.js";
+import { ffmpegAvailable as ffmpegAvailableDefault, stitchVideos as stitchVideosDefault, type StitchResult } from "./stitch.js";
 import { MAX_FRAMES } from "./wan-workflow.js";
 
 // CreateVideo caps fps at 120.
@@ -28,6 +29,18 @@ const MAX_FPS = 120;
 // Generous cap. Raised from 1 MB to accommodate base64 reference images (a 1024² portrait PNG is
 // ~1.5 MB raw → ~2 MB base64); a few references still fit comfortably.
 const MAX_BODY_BYTES = 16_000_000;
+
+// /stitch uploads whole mp4 clips (base64), which are far larger than images — give that route its
+// own cap. 256 MB comfortably holds a sequence of several-second clips (ADR-0010).
+const MAX_STITCH_BODY_BYTES = 256_000_000;
+const MAX_CLIPS = 50;
+
+// Injectable server dependencies (ADR-0010): the ffmpeg-backed stitcher + availability probe, so unit
+// tests cover the /stitch 200 path and /health flag with no ffmpeg. Default to the real ones.
+export interface ServerDeps {
+  stitchVideos?: (clips: Buffer[]) => Promise<StitchResult>;
+  ffmpegAvailable?: () => Promise<boolean>;
+}
 
 // The built-in dev/test page, served at GET / and GET /index.html. Read once at module load
 // (resolves next to this file regardless of cwd) so requests serve from memory. Self-contained —
@@ -55,13 +68,13 @@ function sendBytes(res: ServerResponse, bytes: Buffer, contentType: string): voi
   res.end(bytes);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         reject(new Error("request body too large"));
         req.destroy();
         return;
@@ -235,6 +248,34 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   return { params };
 }
 
+// Validate the /stitch body (ADR-0010): a `clips` array of 2–50 non-empty base64 mp4 strings, in the
+// order they should be joined. Returns the clip strings or a 422 message.
+function parseStitchBody(raw: string): { clips: string[] } | { error: string } {
+  let body: unknown;
+  try {
+    body = raw.trim() ? JSON.parse(raw) : {};
+  } catch {
+    return { error: "request body is not valid JSON" };
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { error: "request body must be a JSON object" };
+  }
+  const clips = (body as Record<string, unknown>).clips;
+  if (!Array.isArray(clips)) {
+    return { error: "`clips` is required and must be an array of base64 mp4 strings" };
+  }
+  if (clips.length < 2) {
+    return { error: "`clips` must contain at least 2 clips to stitch" };
+  }
+  if (clips.length > MAX_CLIPS) {
+    return { error: `\`clips\` must contain at most ${MAX_CLIPS} clips` };
+  }
+  if (!clips.every((c) => typeof c === "string" && c.length > 0)) {
+    return { error: "each entry in `clips` must be a non-empty base64 string" };
+  }
+  return { clips: clips as string[] };
+}
+
 // A checkpoint override is a ComfyUI ckpt_name (may include a forward-slash subfolder). We keep
 // validation light — ComfyUI is the authority on which names exist — but reject the obviously
 // unsafe/empty shapes: non-strings, empty/whitespace, overlong, path traversal, backslashes, NUL,
@@ -387,6 +428,38 @@ async function handleAnimate(
   }
 }
 
+async function handleStitch(
+  req: IncomingMessage,
+  res: ServerResponse,
+  stitch: (clips: Buffer[]) => Promise<StitchResult>,
+): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readBody(req, MAX_STITCH_BODY_BYTES);
+  } catch (err) {
+    const tooLarge = err instanceof Error && /too large/.test(err.message);
+    sendJson(res, tooLarge ? 413 : 422, {
+      error: tooLarge
+        ? `request body exceeds ${Math.round(MAX_STITCH_BODY_BYTES / 1_000_000)} MB — stitch fewer or shorter clips`
+        : "could not read request body",
+    });
+    return;
+  }
+  const parsed = parseStitchBody(raw);
+  if ("error" in parsed) {
+    sendJson(res, 422, { error: parsed.error });
+    return;
+  }
+  const clips = parsed.clips.map((b64) => Buffer.from(b64, "base64"));
+  const result = await stitch(clips);
+  if (result.ok) {
+    sendBytes(res, result.bytes, "video/mp4");
+  } else {
+    // ffmpeg missing / concat failure — a host-side problem, like the ComfyUI 503s.
+    sendJson(res, 503, { error: result.error });
+  }
+}
+
 function handleStyles(res: ServerResponse): void {
   const styles = Object.entries(STYLE_LORAS).map(([name, recipe]) => ({
     name,
@@ -401,7 +474,12 @@ function handleStyles(res: ServerResponse): void {
   });
 }
 
-async function handleHealth(res: ServerResponse, config: Config, fetchFn: FetchFn): Promise<void> {
+async function handleHealth(
+  res: ServerResponse,
+  config: Config,
+  fetchFn: FetchFn,
+  ffmpegCheck: () => Promise<boolean>,
+): Promise<void> {
   const { reachable, loras, checkpoints, upscaleModels } = await probeComfy(config.comfyui.url, fetchFn);
   // Report which recipe LoRAs are actually present on the GPU host.
   const recipeFiles = Array.from(new Set(Object.values(STYLE_LORAS).map((r) => r.loraFile)));
@@ -415,6 +493,8 @@ async function handleHealth(res: ServerResponse, config: Config, fetchFn: FetchF
   // when ComfyUI is unreachable all three read as missing and `ready` is false. Skipped entirely when
   // unreachable to avoid three doomed probes.
   const wanMissing = reachable ? await wanModelsMissing(config.comfyui.url, fetchFn) : ["comfyui-unreachable"];
+  // Video stitching availability (ADR-0010): whether ffmpeg is on the host. Independent of ComfyUI.
+  const stitchAvailable = await ffmpegCheck();
   sendJson(res, 200, {
     comfyuiReachable: reachable,
     comfyuiUrl: config.comfyui.url,
@@ -424,10 +504,13 @@ async function handleHealth(res: ServerResponse, config: Config, fetchFn: FetchF
     upscaleModel,
     upscaleModels,
     wan: { ready: wanMissing.length === 0, missing: wanMissing },
+    stitch: { available: stitchAvailable },
   });
 }
 
-export function createServer(config: Config, fetchFn: FetchFn = fetch): Server {
+export function createServer(config: Config, fetchFn: FetchFn = fetch, deps: ServerDeps = {}): Server {
+  const stitch = deps.stitchVideos ?? stitchVideosDefault;
+  const ffmpegCheck = deps.ffmpegAvailable ?? (() => ffmpegAvailableDefault());
   return createHttpServer((req, res) => {
     // Top-level guard: nothing below may throw out of the handler.
     void (async () => {
@@ -457,6 +540,14 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch): Server {
           await handleAnimate(req, res, config, fetchFn);
           return;
         }
+        if (method === "POST" && url === "/stitch") {
+          if (!isAuthorized(req, config)) {
+            sendJson(res, 401, { error: "unauthorized" });
+            return;
+          }
+          await handleStitch(req, res, stitch);
+          return;
+        }
         if (method === "GET" && url === "/styles") {
           if (!isAuthorized(req, config)) {
             sendJson(res, 401, { error: "unauthorized" });
@@ -467,7 +558,7 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch): Server {
         }
         // /health is intentionally NEVER gated — monitoring must work without the token.
         if (method === "GET" && url === "/health") {
-          await handleHealth(res, config, fetchFn);
+          await handleHealth(res, config, fetchFn, ffmpegCheck);
           return;
         }
         sendJson(res, 404, { error: `no route for ${method} ${url}` });

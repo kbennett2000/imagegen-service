@@ -249,6 +249,22 @@
     </div>
   </div>
 
+  <div id="sequence" class="imgblock" hidden style="margin-top:1.25rem; max-width:720px">
+    <label style="margin-top:0">Sequence <span class="hint">(clips to stitch, in play order)</span></label>
+    <p class="hint" style="margin:.1rem 0 .4rem">
+      Add clips with “➕ Add to sequence” under a render, then stitch them into one video. Clips should
+      share the same size and fps (the Animate defaults do).
+    </p>
+    <ol id="seqList" style="margin:.3rem 0 .6rem; padding-left:1.4rem; font-size:.85rem"></ol>
+    <div style="display:flex; gap:.5rem; flex-wrap:wrap">
+      <button type="button" id="seqStitch" class="linkbtn">Stitch &amp; download</button>
+      <button type="button" id="seqClear" class="linkbtn">Clear sequence</button>
+    </div>
+    <p class="hint" id="seqHint" style="margin:.4rem 0 0" hidden></p>
+    <div id="seqOutput" style="margin-top:.6rem"></div>
+    <div id="seqError" class="err" hidden></div>
+  </div>
+
   <script>
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
@@ -265,6 +281,7 @@
     let initImageB64 = null; // img2img starting image
     let refImageB64 = null;  // IP-Adapter reference photo
     let lastGeneratedBlob = null; // the most recent /generate result, for the "use as…" buttons
+    let stitchAvailable = false;  // whether the server has ffmpeg (from /health), gates Stitch
 
     // Read a chosen file, downscale to <=1024px on the long edge (keeps SDXL happy + the request
     // small), and return { b64, dataUrl }. b64 is the bare base64 PNG the API expects.
@@ -353,6 +370,8 @@
         populateCheckpoints(h);
         populateUpscale(h);
         populateAnim(h);
+        stitchAvailable = !!(h.stitch && h.stitch.available);
+        renderSequence();
       } catch (e) {
         statusEl.className = "status bad";
         statusEl.textContent = "Could not reach the service /health endpoint: " + e;
@@ -704,6 +723,14 @@
         cont.style.margin = ".5rem 0 0 .5rem";
         cont.addEventListener("click", () => continueFromLastFrame(blob));
         animOutputEl.appendChild(cont);
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "linkbtn";
+        add.textContent = "➕ Add to sequence";
+        add.style.display = "inline-block";
+        add.style.margin = ".5rem 0 0 .5rem";
+        add.addEventListener("click", () => addToSequence(blob));
+        animOutputEl.appendChild(add);
         animMetaEl.textContent = "Done in " + elapsed + "s — " + Math.round(blob.size / 1024) + " KB" +
           (seedRaw !== "" ? " — seed " + seedRaw : " — random seed");
       } catch (e) {
@@ -711,6 +738,110 @@
       } finally {
         go.disabled = false;
         go.textContent = label;
+      }
+    });
+
+    // ---- Sequence & stitch (POST /stitch) -------------------------------------------------
+    let sequenceClips = []; // rendered clip blobs, in play order
+    let seqUrl = null;
+    const seqListEl = $("seqList");
+    const seqOutputEl = $("seqOutput");
+    const seqErrorEl = $("seqError");
+    function showSeqError(msg) { seqErrorEl.textContent = msg; seqErrorEl.hidden = false; }
+    function clearSeqError() { seqErrorEl.hidden = true; seqErrorEl.textContent = ""; }
+
+    function addToSequence(blob) {
+      sequenceClips.push(blob);
+      renderSequence();
+      $("sequence").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    function moveClip(i, delta) {
+      const j = i + delta;
+      if (j < 0 || j >= sequenceClips.length) return;
+      const t = sequenceClips[i]; sequenceClips[i] = sequenceClips[j]; sequenceClips[j] = t;
+      renderSequence();
+    }
+    function removeClip(i) { sequenceClips.splice(i, 1); renderSequence(); }
+
+    function renderSequence() {
+      $("sequence").hidden = sequenceClips.length === 0;
+      seqListEl.innerHTML = "";
+      const smallBtn = (txt, title, fn) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "linkbtn"; b.textContent = txt; b.title = title;
+        b.style.padding = ".02rem .35rem"; b.style.marginLeft = ".25rem";
+        b.addEventListener("click", fn); return b;
+      };
+      sequenceClips.forEach((blob, i) => {
+        const li = document.createElement("li");
+        li.style.margin = ".2rem 0";
+        const label = document.createElement("span");
+        label.textContent = "Clip " + (i + 1) + " — " + Math.round(blob.size / 1024) + " KB";
+        li.appendChild(label);
+        li.appendChild(smallBtn("↑", "move up", () => moveClip(i, -1)));
+        li.appendChild(smallBtn("↓", "move down", () => moveClip(i, 1)));
+        li.appendChild(smallBtn("×", "remove", () => removeClip(i)));
+        seqListEl.appendChild(li);
+      });
+      $("seqStitch").disabled = !(sequenceClips.length >= 2 && stitchAvailable);
+      const hint = $("seqHint");
+      if (!stitchAvailable) {
+        hint.hidden = false;
+        hint.textContent = "Stitching needs ffmpeg on the server (not detected in /health).";
+      } else if (sequenceClips.length < 2) {
+        hint.hidden = false; hint.textContent = "Add at least 2 clips to stitch.";
+      } else {
+        hint.hidden = true;
+      }
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onerror = () => reject(new Error("read failed"));
+        fr.onload = () => resolve(String(fr.result).split(",")[1]);
+        fr.readAsDataURL(blob);
+      });
+    }
+
+    $("seqClear").addEventListener("click", () => {
+      sequenceClips = []; seqOutputEl.innerHTML = ""; clearSeqError(); renderSequence();
+    });
+
+    $("seqStitch").addEventListener("click", async () => {
+      if (sequenceClips.length < 2) return;
+      clearSeqError();
+      const btn = $("seqStitch");
+      btn.disabled = true;
+      const lbl = btn.textContent;
+      btn.innerHTML = '<span class="spinner"></span>Stitching…';
+      try {
+        const clips = await Promise.all(sequenceClips.map(blobToBase64));
+        const res = await fetch("/stitch", {
+          method: "POST",
+          headers: authHeaders({ "content-type": "application/json" }),
+          body: JSON.stringify({ clips }),
+        });
+        if (!res.ok) { showSeqError("HTTP " + res.status + " — " + await errorMessage(res)); return; }
+        const blob = await res.blob();
+        if (seqUrl) URL.revokeObjectURL(seqUrl);
+        seqUrl = URL.createObjectURL(blob);
+        seqOutputEl.innerHTML = "";
+        const v = document.createElement("video");
+        v.className = "out"; v.src = seqUrl; v.controls = true; v.loop = true; v.muted = true;
+        v.style.maxWidth = "100%";
+        seqOutputEl.appendChild(v);
+        const a = document.createElement("a");
+        a.href = seqUrl; a.download = "sequence.mp4";
+        a.textContent = "download stitched mp4 (" + Math.round(blob.size / 1024) + " KB)";
+        a.className = "linkbtn"; a.style.display = "inline-block"; a.style.marginTop = ".5rem";
+        seqOutputEl.appendChild(a);
+        a.click(); // auto-start the download
+      } catch (e) {
+        showSeqError("Request failed: " + e);
+      } finally {
+        btn.textContent = lbl;
+        renderSequence();
       }
     });
 
