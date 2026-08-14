@@ -108,8 +108,9 @@ preflight() {
   vram_mib="$(echo "$gpu_line"  | awk -F', *' '{print $2}')"
   driver_ver="$(echo "$gpu_line"| awk -F', *' '{print $3}')"
 
-  # CUDA capability is reported in the nvidia-smi banner as "CUDA Version: X.Y".
-  cuda_cap="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: [0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+  # CUDA capability is reported in the nvidia-smi banner as "CUDA Version: X.Y" (older drivers) or
+  # "CUDA UMD Version: X.Y" (610-series and newer). Accept both.
+  cuda_cap="$(nvidia-smi 2>/dev/null | grep -oE 'CUDA (UMD )?Version: [0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -1)"
   if [ -z "$cuda_cap" ]; then
     die "Could not read the CUDA version from your NVIDIA driver." \
         "Reinstall/upgrade the official driver ($DRIVER_LINK), reboot, and re-run."
