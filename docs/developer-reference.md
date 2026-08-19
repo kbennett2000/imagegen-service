@@ -269,6 +269,30 @@ curl -X POST http://localhost:8189/animate \
 - No LoRA/style/upscale/refiner interplay — this is a separate, video-only path. `/generate` is
   unchanged.
 
+### `POST /stitch` → `video/mp4`
+
+Joins several clips into one video (ADR-[0010](adr/0010-video-stitching.md)). JSON in, combined **mp4
+bytes** out. Auth-gated. Since clips from `/animate` are all H.264 at the same resolution/fps, this is
+a lossless `ffmpeg` stream copy (`-c copy`) — near-instant, no re-encode.
+
+```bash
+curl -X POST http://localhost:8189/stitch \
+  -H 'content-type: application/json' \
+  -d '{"clips":["'"$(base64 -w0 clip1.mp4)"'","'"$(base64 -w0 clip2.mp4)"'"]}' \
+  --output sequence.mp4
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `clips` | string[] | **required** — 2–50 base64 mp4 clips, in play order. |
+
+- The service is stateless (it never saves what it renders), so the **client uploads the clips back**.
+  This route allows a larger request body (256 MB) than the image routes; over that → **413**.
+- **Requires `ffmpeg`** on the host (present alongside ComfyUI). Absent → **503**; check `GET /health`'s
+  `stitch.available` first.
+- Clips should share **resolution and fps** (the `/animate` defaults guarantee this). Mixed sizes make
+  `ffmpeg` fail → a clear **503**, never a silently broken file.
+
 ### `GET /styles`
 
 Lists the preset styles that have a LoRA recipe. Styles not listed are still accepted by
@@ -308,7 +332,8 @@ curl http://localhost:8189/health
   "checkpoints": ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors", "..."],
   "upscaleModel": "RealESRGAN_x4plus.pth",
   "upscaleModels": ["RealESRGAN_x4plus.pth", "..."],
-  "wan": { "ready": true, "missing": [] } }
+  "wan": { "ready": true, "missing": [] },
+  "stitch": { "available": true } }
 ```
 
 - `lorasLoaded` — which recipe LoRAs are actually present on the ComfyUI host.
@@ -321,6 +346,7 @@ curl http://localhost:8189/health
 - `wan` — image-to-video readiness: `{ "ready": <all three Wan files present>, "missing": [...] }`.
   `POST /animate` works only when `ready` is `true`; `missing` names what `scripts/fetch-wan22-models.ts`
   should fetch.
+- `stitch` — `{ "available": <ffmpeg present on the host> }`. `POST /stitch` works only when `true`.
 
 ## Quality tiers
 

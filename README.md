@@ -157,6 +157,10 @@ curl -X POST http://localhost:8189/animate \
 There is also a standalone **`scripts/smoke-wan22.ts`** that submits to ComfyUI directly (bypassing the
 service) for pipeline debugging — it fails loudly if ComfyUI is unreachable or a model is missing.
 
+**Chain clips into a longer video.** In the test UI, use **Continue from last frame** to start a new
+clip where the last one ended, **Add to sequence** to queue clips, then **Stitch & download** to join
+them into one mp4 (`POST /stitch`, a lossless `ffmpeg` concat — needs `ffmpeg` on the host).
+
 ## License
 
 [MIT](LICENSE) © 2026 Kris Bennett.
