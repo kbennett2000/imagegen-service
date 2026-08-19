@@ -283,10 +283,10 @@ test("referenceStrength overrides the default IP-Adapter weight", async () => {
 
 test("checkpoint override -> base workflow node 4 ckpt_name is replaced", async () => {
   const mock = new MockComfy();
-  await generateImage(URL, { prompt: "x", checkpoint: "juggernautXL_ragnarok.safetensors" }, mock.fetch);
+  await generateImage(URL, { prompt: "x", checkpoint: "sd_xl_refiner_1.0.safetensors" }, mock.fetch);
   const graph = mock.submitted[0]!.graph;
   assert.equal(graph["4"].class_type, "CheckpointLoaderSimple");
-  assert.equal(graph["4"].inputs.ckpt_name, "juggernautXL_ragnarok.safetensors");
+  assert.equal(graph["4"].inputs.ckpt_name, "sd_xl_refiner_1.0.safetensors");
 });
 
 test("checkpoint override at quality=high -> base node 4 replaced, refiner node 11 left stock", async () => {
