@@ -125,9 +125,16 @@ The API, configuration, authentication, and always-on deployment details live in
 the systemd unit.
 
 Quick facts: TypeScript on Node, run directly with `tsx` (no build step); Node's built-in HTTP
-server and `fetch` (no web framework, no runtime dependencies); file-based config only (no
-environment variables). It fronts a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI) and
-returns raw PNG bytes.
+server and `fetch` (no web framework, no runtime npm dependencies — it shells out to the `ffmpeg`
+and `flock` system tools, like a script would); file-based config only (no environment variables).
+It fronts a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI) and returns raw PNG bytes.
+
+**GPU tenancy.** This service and text-transform-service share one GPU. They take turns via a shared
+advisory `flock` (`/run/gpu-tenant.lock`): whoever holds it drains its queued work, frees its VRAM
+(this service POSTs ComfyUI `/free`), then hands off. It's invisible to callers — `/generate` and
+`/animate` just block briefly if the peer is mid-batch. Configurable under `gpuLock` (kill-switch
+`gpuLock.enabled`); fails open if the lockfile is unavailable. See
+[ADR-0012](docs/adr/0012-gpu-tenancy-flock-lease.md).
 
 ```bash
 npm install
