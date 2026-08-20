@@ -84,6 +84,9 @@ const DEFAULT_NODES = ["PrepImageForClipVision"];
 export class MockComfy {
   readonly submitted: SubmittedPrompt[] = [];
   readonly uploads: string[] = []; // filenames POSTed to /upload/image
+  freeCalls = 0; // POST /free requests (the GPU lease's free-before-release, ADR-0012)
+  // Optional hook fired on each POST /free, e.g. to record ordering vs the lock release in a test.
+  onFree?: () => void;
   private readonly pollCounts = new Map<string, number>();
   private readonly opts: MockOptions;
 
@@ -193,6 +196,13 @@ export class MockComfy {
         const name = `ref-mock-${this.uploads.length + 1}.png`;
         this.uploads.push(name);
         return this.jsonResponse(200, { name, subfolder: "", type: "input" });
+      }
+
+      // POST /free — the GPU lease drops the resident checkpoint before releasing the flock (ADR-0012).
+      if (method === "POST" && path === "/free") {
+        this.freeCalls += 1;
+        this.onFree?.();
+        return this.jsonResponse(200, {});
       }
 
       // POST /prompt

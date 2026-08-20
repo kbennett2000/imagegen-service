@@ -318,6 +318,31 @@ function comfyBase(url: string): string {
   return (url || "http://localhost:8188").replace(/\/$/, "");
 }
 
+// Drop ComfyUI's resident VRAM (the ~6.9 GB checkpoint) so the other GPU tenant can load without
+// OOM. Called by the GPU lease BEFORE it releases the shared flock (ADR-0012 free-before-release).
+// Targets the fronted ComfyUI (comfyui.url, :8188) — never this service's own port. Never throws:
+// a failed /free is logged and swallowed so it can't wedge lease release. Returns true on a 2xx.
+export async function freeComfy(comfyUrl: string, fetchFn: FetchFn = fetch): Promise<boolean> {
+  const base = comfyBase(comfyUrl);
+  try {
+    const res = await fetchFn(`${base}/free`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ unload_models: true, free_memory: true }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[engine] ComfyUI /free returned ${res.status}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(`[engine] ComfyUI /free failed: ${reason}`);
+    return false;
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
