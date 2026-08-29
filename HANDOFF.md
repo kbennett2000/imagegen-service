@@ -1,8 +1,17 @@
 # Handoff
 
 ## Current state
+**Popular SFW models from Civitai (ADR-0016, PR open for review; off master).** Extends the catalog
+with 6 checkpoints (`dreamshaper`, `realcartoon`, `nightvision`, `colorful`, `samaritan3d`,
+`starlight`) and 11 style LoRAs (ink wash, flat vector, travel poster, sticker, gouache, charcoal,
+art deco, risograph, cel shading, woodcut, blueprint) — all verified SFW SDXL 1.0 on Civitai
+(`nsfw:false`, version-pinned modelVersionIds). **Styles now 33, checkpoints 10.** Pure catalog data
+(manifest + `CHECKPOINTS`/`STYLE_LORAS`); no engine change. Civitai primaries need the API key
+(ADR-0013); one blueprint LoRA's dest filename is space-free to survive the installer. Tests: 149 pass.
+
+### Prior — Image model catalog + checkpoint selection (ADR-0014)
 **Image model catalog + checkpoint selection — Slice 2 of the "wide variety of SFW models" effort
-(ADR-0014, PR open for review; stacked on the ADR-0013 Civitai branch).** Adds a curated set of SFW
+(ADR-0014, merged).** Adds a curated set of SFW
 base checkpoints and 10 more style LoRAs, plus the machinery to pick and discover them.
 
 - **Checkpoint catalog** (`src/checkpoints.ts`): friendly-name → filename map (like `style-loras.ts`).

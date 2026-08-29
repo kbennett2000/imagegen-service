@@ -342,11 +342,12 @@ curl -H 'Authorization: Bearer choose-a-long-random-string' http://localhost:818
   "note": "Styles not listed here are accepted by /generate and rendered prompt-only (no LoRA)." }
 ```
 
-The preset styles are `pixel art`, `oil painting`, `comic book`, `lego-style`, `pencil sketch`,
+The 33 preset styles are `pixel art`, `oil painting`, `comic book`, `lego-style`, `pencil sketch`,
 `watercolour`, `anime`, `storybook`, `3d`, `cyberpunk`, `ukiyo-e`, `claymation`, `line art`,
 `coloring book`, `papercut`, `isometric`, `stained glass`, `embroidery`, `amigurumi`, `vaporwave`,
-`low-poly`, and `art nouveau`. Names are matched case-insensitively. `noir` and `ghibli` are
-intentionally prompt-only (no reliable base-SDXL LoRA).
+`low-poly`, `art nouveau`, `ink wash`, `flat vector`, `travel poster`, `sticker`, `gouache`,
+`charcoal`, `art deco`, `risograph`, `cel shading`, `woodcut`, and `blueprint`. Names are matched
+case-insensitively. `noir` and `ghibli` are intentionally prompt-only (no reliable base-SDXL LoRA).
 
 ### `GET /checkpoints`
 
@@ -366,10 +367,12 @@ curl http://localhost:8189/checkpoints
   "note": "Any checkpoint installed in ComfyUI's models/checkpoints/ also works by exact filename via the `checkpoint` field on /generate." }
 ```
 
-The catalog names are `realvisxl` (photoreal people/scenes), `juggernaut` (photoreal all-rounder),
-`animagine` (anime), and `zavychroma` (cinematic fantasy) — all full SFW SDXL checkpoints. The files
-are downloaded by the installer (see [`install/models.manifest`](../install/models.manifest)); a
-catalog entry with `installed: false` just hasn't been downloaded on this box yet.
+The 10 catalog names are `realvisxl`, `juggernaut`, `animagine`, `zavychroma` (ADR-0014, ungated HF),
+plus `dreamshaper`, `realcartoon`, `nightvision`, `colorful`, `samaritan3d`, `starlight` (ADR-0016,
+from Civitai) — all full SFW SDXL checkpoints. The files are downloaded by the installer (see
+[`install/models.manifest`](../install/models.manifest)); a catalog entry with `installed: false`
+just hasn't been downloaded on this box yet (the Civitai ones need the API key — see
+[Downloading models](#downloading-models-civitai-api-key)).
 
 ### `GET /health`
 

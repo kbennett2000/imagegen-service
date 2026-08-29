@@ -146,6 +146,73 @@ export const STYLE_LORAS: Record<string, StyleLora> = {
     strength: 0.8,
     noRefiner: true,
   },
+  // --- More SFW styles sourced from Civitai (ADR-0016) ---
+  "ink wash": {
+    loraFile: "Zen_Ink_Wash_Sumi-e.safetensors",
+    trigger: "sumi-e, ink wash painting",
+    strength: 0.9,
+    noRefiner: true,
+  },
+  "flat vector": {
+    loraFile: "F2D-000003.safetensors",
+    trigger: "flat color, vector art, clean lines, simple background",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  "travel poster": {
+    loraFile: "VintageTravelPoster01a_CE_SDXL_64x32x120x2bOT.safetensors",
+    trigger: "vntgtrvlpstrCE style, travel poster",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  sticker: {
+    loraFile: "StickersRedmond.safetensors",
+    trigger: "Stickers, Sticker",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  gouache: {
+    loraFile: "Gouache01a_CE_XL_200-OT.safetensors",
+    trigger: "gcheCE_style, Gouache painting style",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  charcoal: {
+    loraFile: "Charcoal3.0.safetensors",
+    trigger: "Charcoal drawing",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  "art deco": {
+    loraFile: "Art_Deco_Style_SDXL.safetensors",
+    trigger: "ais-artdeco",
+    strength: 0.9,
+    noRefiner: true,
+  },
+  risograph: {
+    loraFile: "risograph-sdxl.safetensors",
+    trigger: "risograph",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  "cel shading": {
+    loraFile: "SDXLCelShading-000003.safetensors",
+    trigger: "cel shading, anime",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  woodcut: {
+    loraFile: "wdct.safetensors",
+    trigger: "wdct",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  blueprint: {
+    loraFile: "Technical_Blueprint_XL_SDXL_V2.0.safetensors",
+    trigger: "Blueprint, Schematic Drawing, technical drawing",
+    strength: 1.0,
+    noRefiner: true,
+  },
   // "noir" and "ghibli" are intentionally omitted (prompt-only; no reliable base-SDXL LoRA).
 };
 

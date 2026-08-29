@@ -75,22 +75,27 @@ Then head to **[Using it](docs/using-it.md)**.
 
 ## The art styles
 
-Generate a plain, realistic picture, or pick one of **22 art styles** to give it a distinct look:
+Generate a plain, realistic picture, or pick one of **33 art styles** to give it a distinct look:
 
 | Style | The feel | | Style | The feel |
 |---|---|---|---|---|
-| *(no style)* | Realistic | | claymation | Clay |
-| pixel art | Retro | | line art | Clean outlines |
-| oil painting | Classic | | coloring book | Outline-only |
-| comic book | Bold | | papercut | Layered paper |
-| lego-style | Blocky | | isometric | Tiny 3D scenes |
-| pencil sketch | Hand-drawn | | stained glass | Leaded glass |
-| watercolour | Soft | | embroidery | Stitched |
-| anime | Animated | | amigurumi | Crocheted |
-| storybook | Whimsical | | vaporwave | Retro-neon |
-| 3d | Pixar-ish | | low-poly | PS1-era 3D |
-| cyberpunk | Neon | | art nouveau | Ornate |
-| ukiyo-e | Japanese | | | |
+| *(no style)* | Realistic | | art nouveau | Ornate |
+| pixel art | Retro | | ink wash | Sumi-e |
+| oil painting | Classic | | flat vector | Clean vector |
+| comic book | Bold | | travel poster | Retro poster |
+| lego-style | Blocky | | sticker | Die-cut |
+| pencil sketch | Hand-drawn | | gouache | Opaque paint |
+| watercolour | Soft | | charcoal | Smudged |
+| anime | Animated | | art deco | 1920s |
+| storybook | Whimsical | | risograph | Spot-ink |
+| 3d | Pixar-ish | | cel shading | Flat anime |
+| cyberpunk | Neon | | woodcut | Relief print |
+| ukiyo-e | Japanese | | blueprint | Schematic |
+| claymation | Clay | | line art | Clean outlines |
+| coloring book | Outline-only | | papercut | Layered paper |
+| isometric | Tiny 3D scenes | | stained glass | Leaded glass |
+| embroidery | Stitched | | amigurumi | Crocheted |
+| vaporwave | Retro-neon | | low-poly | PS1-era 3D |
 
 You can also **describe a style in your own words** (like "noir" or "ghibli") and it'll do its best,
 or **pick a different base model** entirely — the service ships a small catalog of SFW SDXL

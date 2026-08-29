@@ -83,3 +83,29 @@ loras|AmiguramiRedmond-Crochet-Amigurumi.safetensors|https://huggingface.co/arti
 loras|vapor_graphic_sdxl.safetensors|https://huggingface.co/CiroN2022/vaporwave-graphic-sdxl-v10/resolve/main/vapor_graphic_sdxl.safetensors|-|100
 loras|PS1Redmond-PS1Game-Playstation1Graphics.safetensors|https://huggingface.co/artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl/resolve/main/PS1Redmond-PS1Game-Playstation1Graphics.safetensors|-|100
 loras|anime-nouveau-xl.safetensors|https://huggingface.co/Linaqruf/anime-nouveau-xl-lora/resolve/main/anime-nouveau-xl.safetensors|-|25
+#
+# ---------------------------------------------------------------------------------------------
+# Popular SFW checkpoints from Civitai (ADR-0016). Primary = Civitai (needs the API key, ADR-0013);
+# no ungated HF mirror for most. Version-pinned modelVersionId in each URL. Full SDXL 1.0.
+# ---------------------------------------------------------------------------------------------
+checkpoints|dreamshaperXL_alpha2Xl10.safetensors|https://civitai.com/api/download/models/126688|https://huggingface.co/Lykon/dreamshaper-xl-1-0/resolve/main/DreamShaperXL_Turbo_V2-SFW.safetensors|6000
+checkpoints|realcartoonXL_v7.safetensors|https://civitai.com/api/download/models/686204|-|6000
+checkpoints|nightvisionxl_V900.safetensors|https://civitai.com/api/download/models/577919|-|6000
+checkpoints|colorfulxl_v70.safetensors|https://civitai.com/api/download/models/636270|-|6000
+checkpoints|samaritan3dCartoon_v40SDXL.safetensors|https://civitai.com/api/download/models/144566|-|6000
+checkpoints|starlightXLAnimated_v3.safetensors|https://civitai.com/api/download/models/182077|-|6000
+#
+# ---------------------------------------------------------------------------------------------
+# More SFW style LoRAs from Civitai (ADR-0016). Filenames/triggers/strengths in src/style-loras.ts.
+# ---------------------------------------------------------------------------------------------
+loras|Zen_Ink_Wash_Sumi-e.safetensors|https://civitai.com/api/download/models/724876|-|150
+loras|F2D-000003.safetensors|https://civitai.com/api/download/models/335464|-|150
+loras|VintageTravelPoster01a_CE_SDXL_64x32x120x2bOT.safetensors|https://civitai.com/api/download/models/902863|-|200
+loras|StickersRedmond.safetensors|https://civitai.com/api/download/models/160130|-|100
+loras|Gouache01a_CE_XL_200-OT.safetensors|https://civitai.com/api/download/models/2111677|-|200
+loras|Charcoal3.0.safetensors|https://civitai.com/api/download/models/567185|-|150
+loras|Art_Deco_Style_SDXL.safetensors|https://civitai.com/api/download/models/307533|-|150
+loras|risograph-sdxl.safetensors|https://civitai.com/api/download/models/132463|-|1000
+loras|SDXLCelShading-000003.safetensors|https://civitai.com/api/download/models/1052777|-|150
+loras|wdct.safetensors|https://civitai.com/api/download/models/161039|-|600
+loras|Technical_Blueprint_XL_SDXL_V2.0.safetensors|https://civitai.com/api/download/models/585877|-|400
