@@ -1,6 +1,34 @@
 # Handoff
 
 ## Current state
+**Image model catalog + checkpoint selection — Slice 2 of the "wide variety of SFW models" effort
+(ADR-0014, PR open for review; stacked on the ADR-0013 Civitai branch).** Adds a curated set of SFW
+base checkpoints and 10 more style LoRAs, plus the machinery to pick and discover them.
+
+- **Checkpoint catalog** (`src/checkpoints.ts`): friendly-name → filename map (like `style-loras.ts`).
+  4 full SFW SDXL checkpoints — `realvisxl`, `juggernaut`, `animagine`, `zavychroma` (all ungated HF,
+  ~7 GB, compatible with the stock cfg-7/25-step sampler). **Turbo/Lightning deliberately excluded** —
+  they need ~4-8 steps/low cfg the current tiers don't provide.
+- **Selection**: `/generate`'s `checkpoint` accepts a catalog **name** OR a raw filename
+  (`resolveCheckpoint` maps names, passes filenames through — backward compatible). Only node "4" is
+  injected; the SDXL refiner (node "11") is untouched, so quality=high still works.
+- **Discovery**: new `GET /checkpoints` (gated like `/styles`, never throws) lists
+  `{name,file,description,installed}` from the live object_info probe; `/health` gains
+  `checkpointsInstalled`.
+- **10 new style LoRAs** in `STYLE_LORAS`: line art, coloring book, papercut, isometric, stained
+  glass, embroidery, amigurumi, vaporwave, low-poly, art nouveau (all ungated HF, verified SFW). Also
+  **fixed the long-broken `watercolour`** source (was `-|-`, now the ungated Pomological Watercolor
+  LoRA saved under `watercolor-orie-xl.safetensors`). Styles total **22**.
+- **Manifest**: 4 checkpoint + 11 lora source lines added/fixed in `install/models.manifest` (all HF
+  `resolve/main`, verified via the HF API for existence + size). No installer code change needed.
+- **Tests:** `npm run test:unit` → **108 pass** (98 prior + 5 `checkpoints.test` + 5 `server.test`).
+  `/styles` count assertion is now derived from `STYLE_LORAS` (not hardcoded). `process.env` absent
+  from `src/`; no runtime deps. Docs updated (ADR-0014, developer-reference, README styles table).
+- **Note:** models are referenced by name; the ~28 GB of new checkpoints are downloaded by the
+  installer on the ComfyUI box, not committed here. `/checkpoints` shows `installed:false` until then.
+- **Next:** Slice 3 = multi-model video dispatch + a 2nd video model (ADR-0015).
+
+### Prior — Civitai-authenticated model downloads (ADR-0013)
 **Civitai-authenticated model downloads — Slice 1 of the "wide variety of SFW models" effort
 (ADR-0013, PR open for review).** Foundation only: the download path can now authenticate to
 Civitai's gated endpoints, so later slices can add gated checkpoints/LoRAs/video models. **No `src/`

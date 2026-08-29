@@ -57,6 +57,16 @@ const DEFAULT_LORAS = [
   "cyberpunk_xl_v1.safetensors",
   "Ukiyo-e-Art-XL.safetensors",
   "CLAYMATE-v2-sdxl.safetensors",
+  "LineAniRedmondV2-Lineart-LineAniAF.safetensors",
+  "ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors",
+  "papercut.safetensors",
+  "Miniature_Isometric_Objects_3d_SDXL.safetensors",
+  "stained_glass_style_v1_sdxl.safetensors",
+  "embroidered_style_v1_sdxl.safetensors",
+  "AmiguramiRedmond-Crochet-Amigurumi.safetensors",
+  "vapor_graphic_sdxl.safetensors",
+  "PS1Redmond-PS1Game-Playstation1Graphics.safetensors",
+  "anime-nouveau-xl.safetensors",
 ];
 
 const DEFAULT_IPADAPTERS = ["ip-adapter-plus-face_sdxl_vit-h.safetensors"];

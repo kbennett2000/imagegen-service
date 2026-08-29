@@ -85,6 +85,67 @@ export const STYLE_LORAS: Record<string, StyleLora> = {
     strength: 1.0,
     noRefiner: true,
   },
+  // --- Additional SFW styles (ADR-0014) ---
+  "line art": {
+    loraFile: "LineAniRedmondV2-Lineart-LineAniAF.safetensors",
+    trigger: "LineAniAF, lineart",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  "coloring book": {
+    loraFile: "ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors",
+    trigger: "ColoringBookAF, Coloring Book",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  papercut: {
+    loraFile: "papercut.safetensors",
+    trigger: "papercut",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  isometric: {
+    loraFile: "Miniature_Isometric_Objects_3d_SDXL.safetensors",
+    trigger: "isometric",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  "stained glass": {
+    loraFile: "stained_glass_style_v1_sdxl.safetensors",
+    trigger: "stained glass",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  embroidery: {
+    loraFile: "embroidered_style_v1_sdxl.safetensors",
+    trigger: "embroidery",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  amigurumi: {
+    loraFile: "AmiguramiRedmond-Crochet-Amigurumi.safetensors",
+    trigger: "Amigurami, Crochet",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  vaporwave: {
+    loraFile: "vapor_graphic_sdxl.safetensors",
+    trigger: "vapor_graphic",
+    strength: 0.9,
+    noRefiner: true,
+  },
+  "low-poly": {
+    loraFile: "PS1Redmond-PS1Game-Playstation1Graphics.safetensors",
+    trigger: "Playstation 1 Graphics, PS1 Game",
+    strength: 1.0,
+    noRefiner: true,
+  },
+  "art nouveau": {
+    loraFile: "anime-nouveau-xl.safetensors",
+    trigger: "art nouveau",
+    strength: 0.8,
+    noRefiner: true,
+  },
   // "noir" and "ghibli" are intentionally omitted (prompt-only; no reliable base-SDXL LoRA).
 };
 
