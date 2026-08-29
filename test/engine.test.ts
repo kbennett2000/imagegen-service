@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { generateImage } from "../src/engine.ts";
+import { formatComfyExecutionError, generateImage } from "../src/engine.ts";
 import { MockComfy } from "./helpers/mock-comfy.ts";
 
 const URL = "http://localhost:8188";
@@ -121,10 +121,33 @@ test("503-class failure: ComfyUI down -> { ok: false }", async () => {
   assert.equal(result.ok, false);
 });
 
-test("history execution error -> { ok: false }", async () => {
+test("history execution error -> { ok: false }, surfacing the failing node and exception", async () => {
   const mock = new MockComfy({ historyError: () => true });
   const result = await generateImage(URL, { prompt: "x" }, mock.fetch);
   assert.equal(result.ok, false);
+  // The error must name the actual cause, not a truncated JSON preamble (regression: the old
+  // 300-char slice cut off right before the exception).
+  const err = (result as { ok: false; error: string }).error;
+  assert.match(err, /KSampler/);
+  assert.match(err, /RuntimeError/);
+  assert.match(err, /mat1 and mat2 shapes cannot be multiplied/);
+});
+
+test("formatComfyExecutionError: pulls node + exception out of status.messages", () => {
+  const msg = formatComfyExecutionError({
+    status_str: "error",
+    messages: [
+      ["execution_start", {}],
+      ["execution_error", { node_id: "4", node_type: "CheckpointLoaderSimple", exception_type: "Exception", exception_message: "not a valid safetensors file" }],
+    ],
+  });
+  assert.match(msg, /node 4 \(CheckpointLoaderSimple\)/);
+  assert.match(msg, /Exception: not a valid safetensors file/);
+});
+
+test("formatComfyExecutionError: falls back gracefully when the shape is unexpected", () => {
+  const msg = formatComfyExecutionError({ status_str: "error", messages: [] });
+  assert.match(msg, /ComfyUI execution error/);
 });
 
 // CONCURRENCY (critical): two overlapping calls with distinct prompt_ids. The mock makes the

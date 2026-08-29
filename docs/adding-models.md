@@ -188,3 +188,47 @@ Mind the 12 GB ceiling (§0): stay in the TI2V-5B-class fp16 range — 14B is no
 If a newly added file doesn't show up: you almost certainly **didn't restart ComfyUI**, or the
 filename in your config / recipe doesn't match the file on disk **byte-for-byte** (a trailing space,
 a version suffix, `.safetensors` vs `.ckpt`).
+
+---
+
+## 7. Troubleshooting — `HTTP 503 — ComfyUI execution error`
+
+This means the request was accepted and ComfyUI **started rendering, then failed partway** — as
+opposed to a validation error (bad request) or a 503 for a *missing* model. The error line now names
+the failing node and the exception, e.g.:
+
+```
+ComfyUI execution error at node 3 (KSampler): RuntimeError: mat1 and mat2 shapes cannot be multiplied
+```
+
+Read it like this:
+
+- **The node tells you where.** `CheckpointLoaderSimple` (node 4) → the checkpoint file itself won't
+  load. `KSampler` (node 3) → the model loaded but its tensors don't match the SDXL pipeline. A
+  `VAE*` node → a VAE problem. (Nodes `EmptyLatentImage` and `VAELoader` succeeding tells you the
+  latent/VAE setup is fine.)
+- **The exception tells you why.** The two overwhelmingly common causes after adding a checkpoint:
+
+**Cause A — the checkpoint isn't SDXL 1.0.** A shape/size mismatch (`mat1 and mat2 shapes cannot be
+multiplied`, or a channel/dim error) means you installed a *different architecture* — SD 1.5, SD 3,
+Flux, Pony, Illustrious, etc. These load but can't run through this service's SDXL workflow. Fix:
+replace it with a model whose base is **"SDXL 1.0"**.
+
+**Cause B — the download is corrupt or incomplete.** A `safetensors` header / "not a valid
+safetensors file" / EOF error means the file isn't really a model — most often a CivitAI **login
+page** or an error page saved under the `.safetensors` name, or a transfer that was cut off. Check:
+
+```bash
+ls -lh ~/comfyui/models/checkpoints/<yourfile>.safetensors   # a real SDXL checkpoint is ~6.5 GB
+```
+
+A few KB or MB confirms it. Re-download from an ungated source (an official Hugging Face repo is the
+safest), then **restart ComfyUI**.
+
+**Quickest way to isolate it:** generate again with the **stock** checkpoint — `POST /generate`
+*without* a `checkpoint` field (and if you set `comfyui.checkpoint` in `config.json`, blank it to
+`""` and restart the service). If the stock model works, the model you added is the problem, not your
+install.
+
+For the raw traceback, the **ComfyUI console/log** always has the full Python stack — but the
+service's own error line is usually enough to tell A from B.

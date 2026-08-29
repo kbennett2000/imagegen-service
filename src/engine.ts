@@ -649,10 +649,7 @@ export async function generateImage(
       const entry = hist[promptId]; // keyed by our prompt_id
       if (!entry) continue;
       if (entry.status?.status_str === "error") {
-        return {
-          ok: false,
-          error: `ComfyUI execution error: ${JSON.stringify(entry.status).slice(0, 300)}`,
-        };
+        return { ok: false, error: formatComfyExecutionError(entry.status) };
       }
       for (const node of Object.values(entry.outputs ?? {}) as any[]) {
         const first = (node.images ?? [])[0] as OutImage | undefined;
@@ -681,6 +678,24 @@ export async function generateImage(
     const reason = err instanceof Error ? err.message : String(err);
     return { ok: false, error: `ComfyUI request failed: ${reason}` };
   }
+}
+
+// Turn a ComfyUI /history `status` (status_str === "error") into a message that names the ACTUAL
+// cause. ComfyUI carries the useful fields inside the `execution_error` tuple of `status.messages`
+// — `node_id`/`node_type` (which node broke) and `exception_type`/`exception_message` (why). A blunt
+// `JSON.stringify(status).slice(0, 300)` truncates right before those fields, so the caller sees the
+// execution_start/execution_cached preamble and nothing useful. Pull the error tuple out instead.
+// Pure and defensive (guards every field) so it never throws inside a request handler.
+export function formatComfyExecutionError(status: any): string {
+  const msgs: any[] = Array.isArray(status?.messages) ? status.messages : [];
+  const detail = msgs.find((m) => Array.isArray(m) && m[0] === "execution_error")?.[1];
+  if (detail && (detail.exception_message || detail.exception_type)) {
+    const where = detail.node_type ? ` at node ${detail.node_id} (${detail.node_type})` : "";
+    const msg = String(detail.exception_message ?? "").slice(0, 500);
+    return `ComfyUI execution error${where}: ${detail.exception_type ?? "Error"}: ${msg}`;
+  }
+  // Unexpected shape — still surface more than the old 300-char slice did.
+  return `ComfyUI execution error: ${JSON.stringify(status).slice(0, 500)}`;
 }
 
 // Scan a /history entry's outputs for the first produced file. Wan ends in SaveVideo, whose output
@@ -793,10 +808,7 @@ export async function animateImage(
       const entry = hist[promptId];
       if (!entry) continue;
       if (entry.status?.status_str === "error") {
-        return {
-          ok: false,
-          error: `ComfyUI execution error: ${JSON.stringify(entry.status).slice(0, 300)}`,
-        };
+        return { ok: false, error: formatComfyExecutionError(entry.status) };
       }
       out = findOutputFile(entry);
       if (out) break;
