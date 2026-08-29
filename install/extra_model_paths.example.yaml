@@ -1,0 +1,29 @@
+# extra_model_paths.example.yaml — template for spreading ComfyUI models across more than one drive.
+#
+# This is a COMFYUI config file, not an imagegen-service one. Copy it to your ComfyUI install root as
+# `extra_model_paths.yaml`, edit base_path, and restart ComfyUI. ComfyUI then scans BOTH its built-in
+# models/ dir and every root listed here, so a checkpoint on a second drive appears in the service's
+# Model dropdown automatically (the service reads ComfyUI's /object_info — it never scans disk). See
+# docs/adding-models.md ("Splitting model storage across drives") and ADR-0017.
+#
+# Each top-level key is an arbitrary label. base_path is the drive/dir that holds the model subfolders;
+# the per-type lines are subpaths under it. A file at
+#   <base_path>/checkpoints/foo.safetensors
+# is referred to by ComfyUI (and the service's `checkpoint` field) as `foo.safetensors`; a file nested
+# a level deeper, <base_path>/checkpoints/sdxl/foo.safetensors, is `sdxl/foo.safetensors`.
+#
+# NOTE on removable drives: a udisks auto-mount path like /run/media/<user>/<label> only exists while
+# the drive is mounted. If it's unmounted, those models drop out of the dropdown and the fetch scripts
+# won't find them (and may re-download). For a permanent setup, give the drive a stable mountpoint via
+# /etc/fstab and point base_path there.
+
+second_drive:
+    # Edit this to your drive. Example for a udisks-mounted disk labeled "2TB 02":
+    base_path: /run/media/kb/2TB 02/comfyui-models/
+    checkpoints: checkpoints/
+    loras: loras/
+    vae: vae/
+    diffusion_models: diffusion_models/
+    text_encoders: text_encoders/
+    upscale_models: upscale_models/
+    clip_vision: clip_vision/

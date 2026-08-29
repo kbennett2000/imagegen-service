@@ -3,10 +3,13 @@
 // script prints where every file landed.
 //
 // Usage:
-//   npx tsx scripts/fetch-wan22-models.ts [--models-root <dir>] [--dry-run]
+//   npx tsx scripts/fetch-wan22-models.ts [--models-root <dir>] [--extra-root <dir>]... [--dry-run]
 //
 // Default models root: ~/comfyui/models. No environment variables are read (ADR-0001 invariant is
 // scoped to src/, but this script honors the same file/flag-only stance) — configure via --models-root.
+// --extra-root points at additional ComfyUI models roots (e.g. a second drive you've moved files
+// onto; ADR-0017). A full-size copy found under any extra root counts as present and is skipped;
+// new downloads still land in the primary --models-root. Repeatable.
 //
 // The download itself shells out to `curl -L -C -` (resume-friendly, shows progress) so a partial
 // 10 GB file resumes instead of restarting. The SKIP DECISION is a pure function (planDownloads),
@@ -57,25 +60,36 @@ export const WAN_MODELS: readonly ModelSpec[] = [
 
 export interface DownloadPlan {
   spec: ModelSpec;
-  dest: string; // absolute path the file should land at
+  dest: string; // absolute path the file should land at (in the primary models root)
   action: "skip" | "download"; // skip => already present at the expected size
-  existingSize?: number; // present but wrong size => re-download (partial/corrupt)
+  existingSize?: number; // present at dest but wrong size => re-download (partial/corrupt)
+  foundAt?: string; // when skipped: where the full-size copy was found (dest, or under an extra root)
 }
 
 // Pure, testable: decide skip-vs-download for each spec given a stat function. A file counts as
 // present ONLY when it exists AND matches the expected byte size exactly — a partial download (smaller)
 // or a mismatch re-downloads (curl -C - resumes a partial). statFn returns undefined when absent.
+// The check spans the primary modelsRoot AND every extraRoot (e.g. a second drive files were moved
+// onto; ADR-0017) — a full-size copy under any of them counts as present. Downloads always target
+// the primary modelsRoot (dest); extra roots are search-only.
 export function planDownloads(
   models: readonly ModelSpec[],
   modelsRoot: string,
+  extraRoots: readonly string[],
   statFn: (p: string) => { size: number } | undefined,
 ): DownloadPlan[] {
   return models.map((spec) => {
     const dest = path.join(modelsRoot, spec.subdir, spec.file);
-    const st = statFn(dest);
-    if (st && st.size === spec.size) {
-      return { spec, dest, action: "skip" };
+    for (const root of [modelsRoot, ...extraRoots]) {
+      const candidate = path.join(root, spec.subdir, spec.file);
+      const st = statFn(candidate);
+      if (st && st.size === spec.size) {
+        return { spec, dest, action: "skip", foundAt: candidate };
+      }
     }
+    // Not present at full size anywhere; report the primary dest's size (a partial, if any) so the
+    // download line can explain the resume.
+    const st = statFn(dest);
     return { spec, dest, action: "download", existingSize: st?.size };
   });
 }
@@ -88,15 +102,20 @@ function safeStat(p: string): { size: number } | undefined {
   }
 }
 
-function parseArgs(argv: string[]): { modelsRoot: string; dryRun: boolean; civitaiToken: string } {
+function parseArgs(argv: string[]): { modelsRoot: string; dryRun: boolean; civitaiToken: string; extraRoots: string[] } {
   let modelsRoot = path.join(os.homedir(), "comfyui", "models");
   let dryRun = false;
   let civitaiToken = "";
+  const extraRoots: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--models-root") {
       const next = argv[++i];
       if (!next) throw new Error("--models-root requires a directory argument");
       modelsRoot = path.resolve(next);
+    } else if (argv[i] === "--extra-root") {
+      const next = argv[++i];
+      if (!next) throw new Error("--extra-root requires a directory argument");
+      extraRoots.push(path.resolve(next));
     } else if (argv[i] === "--civitai-token") {
       const next = argv[++i];
       if (!next) throw new Error("--civitai-token requires a value");
@@ -107,7 +126,7 @@ function parseArgs(argv: string[]): { modelsRoot: string; dryRun: boolean; civit
       throw new Error(`unknown argument: ${argv[i]}`);
     }
   }
-  return { modelsRoot, dryRun, civitaiToken };
+  return { modelsRoot, dryRun, civitaiToken, extraRoots };
 }
 
 function humanGB(bytes: number): string {
@@ -115,18 +134,19 @@ function humanGB(bytes: number): string {
 }
 
 function main(): void {
-  const { modelsRoot, dryRun, civitaiToken } = parseArgs(process.argv.slice(2));
+  const { modelsRoot, dryRun, civitaiToken, extraRoots } = parseArgs(process.argv.slice(2));
   // The Wan files are all on Hugging Face, so this token is normally unused; it is wired in so a
   // Civitai-sourced mirror would authenticate. Resolved from the flag, else install/secrets.env.
   const token = resolveCivitaiToken(REPO_ROOT, civitaiToken);
   console.log(`ComfyUI models root: ${modelsRoot}`);
-  const plans = planDownloads(WAN_MODELS, modelsRoot, safeStat);
+  if (extraRoots.length) console.log(`Also searching: ${extraRoots.join(", ")}`);
+  const plans = planDownloads(WAN_MODELS, modelsRoot, extraRoots, safeStat);
 
   let downloaded = 0;
   let skipped = 0;
   for (const plan of plans) {
     if (plan.action === "skip") {
-      console.log(`  [skip]     ${plan.spec.file} — already present (${humanGB(plan.spec.size)}) at ${plan.dest}`);
+      console.log(`  [skip]     ${plan.spec.file} — already present (${humanGB(plan.spec.size)}) at ${plan.foundAt ?? plan.dest}`);
       skipped++;
       continue;
     }
