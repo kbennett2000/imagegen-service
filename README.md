@@ -12,7 +12,8 @@
   <a href="docs/install-ubuntu.md">🐧 Install on Linux</a> ·
   <a href="docs/install-windows.md">🪟 Install on Windows</a> ·
   <a href="docs/gallery.md">🖼️ Gallery</a> ·
-  <a href="docs/developer-reference.md">🛠️ For developers</a>
+  <a href="docs/developer-reference.md">🛠️ For developers</a> ·
+  <a href="docs/adding-models.md">➕ Adding models</a>
 </p>
 
 ---

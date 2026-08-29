@@ -57,6 +57,9 @@ by hand.
 - **Optional, for upscaling:** at least one upscale model in `models/upscale_models/` (e.g.
   `RealESRGAN_x4plus.pth`). Without one, `upscale` requests return 503; everything else works.
 
+To add your own checkpoints, LoRAs, or video models by hand — and to check one will fit your
+hardware first — see [Adding models](adding-models.md).
+
 ## Run
 
 ```bash
