@@ -4,6 +4,8 @@ import { test } from "node:test";
 
 import type { Config } from "../src/config.ts";
 import { createServer } from "../src/server.ts";
+import { CHECKPOINTS } from "../src/checkpoints.ts";
+import { STYLE_LORAS } from "../src/style-loras.ts";
 import { MockComfy } from "./helpers/mock-comfy.ts";
 
 const CONFIG: Config = {
@@ -104,7 +106,7 @@ test("GET /styles -> lists the preset styles with their recipes", async () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as any;
     assert.ok(Array.isArray(body.styles));
-    assert.equal(body.styles.length, 12);
+    assert.equal(body.styles.length, Object.keys(STYLE_LORAS).length);
     const oil = body.styles.find((s: any) => s.name === "oil painting");
     assert.deepEqual(oil, {
       name: "oil painting",
@@ -625,6 +627,101 @@ test("GET /health -> reports installed upscale models + effective default", asyn
     const body = (await (await fetch(`${svc.base}/health`)).json()) as any;
     assert.deepEqual(body.upscaleModels.sort(), ["4x-UltraSharp.pth", "RealESRGAN_x4plus.pth"]);
     assert.equal(body.upscaleModel, "RealESRGAN_x4plus.pth"); // first installed (no config default)
+  } finally {
+    await svc.close();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Checkpoint catalog + /checkpoints (ADR-0014)
+// ---------------------------------------------------------------------------------------------
+
+test("GET /checkpoints -> lists the catalog, each flagged installed per ComfyUI", async () => {
+  const catalogFiles = Object.values(CHECKPOINTS).map((c) => c.file);
+  // Advertise the first catalog file as installed (if the catalog is non-empty).
+  const mock = new MockComfy({ checkpoints: catalogFiles.slice(0, 1) });
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/checkpoints`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+    assert.ok(Array.isArray(body.checkpoints));
+    assert.equal(body.checkpoints.length, Object.keys(CHECKPOINTS).length);
+    for (const row of body.checkpoints) {
+      assert.equal(typeof row.name, "string");
+      assert.ok(row.file.endsWith(".safetensors"));
+      assert.equal(typeof row.description, "string");
+      assert.equal(typeof row.installed, "boolean");
+    }
+    // The advertised file (if any) must read installed:true; the rest installed:false.
+    if (catalogFiles.length > 0) {
+      const first = body.checkpoints.find((c: any) => c.file === catalogFiles[0]);
+      assert.equal(first.installed, true);
+    }
+  } finally {
+    await svc.close();
+  }
+});
+
+test("auth enabled -> /checkpoints 401 without token, 200 with token", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock, AUTH_CONFIG);
+  try {
+    const unauth = await fetch(`${svc.base}/checkpoints`);
+    assert.equal(unauth.status, 401);
+    const ok = await fetch(`${svc.base}/checkpoints`, {
+      headers: { authorization: "Bearer s3cret-token" },
+    });
+    assert.equal(ok.status, 200);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("GET /health -> reports which catalog checkpoints are installed", async () => {
+  const catalogFiles = Object.values(CHECKPOINTS).map((c) => c.file);
+  const mock = new MockComfy({ checkpoints: catalogFiles.slice(0, 1) });
+  const svc = await startService(mock);
+  try {
+    const body = (await (await fetch(`${svc.base}/health`)).json()) as any;
+    assert.ok(Array.isArray(body.checkpointsInstalled));
+    assert.deepEqual(body.checkpointsInstalled, catalogFiles.slice(0, 1));
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> a friendly catalog checkpoint name resolves to its ComfyUI file", async () => {
+  const entries = Object.entries(CHECKPOINTS);
+  if (entries.length === 0) return; // vacuous until the catalog is populated
+  const [name, info] = entries[0]!;
+  const mock = new MockComfy({ checkpoints: [info.file] });
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a castle", checkpoint: name }),
+    });
+    assert.equal(res.status, 200);
+    // The engine injects the resolved filename into checkpoint node "4".
+    assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, info.file);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /generate -> an unknown checkpoint name passes through as a raw filename", async () => {
+  const mock = new MockComfy({ checkpoints: ["my-custom-model.safetensors"] });
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a castle", checkpoint: "my-custom-model.safetensors" }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, "my-custom-model.safetensors");
   } finally {
     await svc.close();
   }

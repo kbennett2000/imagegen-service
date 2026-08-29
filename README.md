@@ -75,21 +75,29 @@ Then head to **[Using it](docs/using-it.md)**.
 
 ## The art styles
 
-Generate a plain, realistic picture, or pick one of **12 art styles** to give it a distinct look:
+Generate a plain, realistic picture, or pick one of **22 art styles** to give it a distinct look:
 
 | Style | The feel | | Style | The feel |
 |---|---|---|---|---|
-| *(no style)* | Realistic | | storybook | Whimsical |
-| pixel art | Retro | | 3d | Pixar-ish |
-| oil painting | Classic | | cyberpunk | Neon |
-| comic book | Bold | | ukiyo-e | Japanese |
-| lego-style | Blocky | | claymation | Clay |
-| pencil sketch | Hand-drawn | | anime | Animated |
-| watercolour | Soft | | | |
+| *(no style)* | Realistic | | claymation | Clay |
+| pixel art | Retro | | line art | Clean outlines |
+| oil painting | Classic | | coloring book | Outline-only |
+| comic book | Bold | | papercut | Layered paper |
+| lego-style | Blocky | | isometric | Tiny 3D scenes |
+| pencil sketch | Hand-drawn | | stained glass | Leaded glass |
+| watercolour | Soft | | embroidery | Stitched |
+| anime | Animated | | amigurumi | Crocheted |
+| storybook | Whimsical | | vaporwave | Retro-neon |
+| 3d | Pixar-ish | | low-poly | PS1-era 3D |
+| cyberpunk | Neon | | art nouveau | Ornate |
+| ukiyo-e | Japanese | | | |
 
-You can also just **describe a style in your own words** (like "noir" or "ghibli") and it'll do its
-best. There's even a way to feed it a **reference photo** so a character keeps the same face across
-different scenes — see [Using it](docs/using-it.md#make-a-character-look-consistent).
+You can also **describe a style in your own words** (like "noir" or "ghibli") and it'll do its best,
+or **pick a different base model** entirely — the service ships a small catalog of SFW SDXL
+checkpoints (photoreal, anime, cinematic) selectable per request; see the
+[developer reference](docs/developer-reference.md). There's even a way to feed it a **reference
+photo** so a character keeps the same face across scenes — see
+[Using it](docs/using-it.md#make-a-character-look-consistent).
 
 ## Part of a small family of projects
 
@@ -107,7 +115,8 @@ each do one job well, on your own hardware:
 
 The API, configuration, authentication, and always-on deployment details live in the
 **[Developer reference](docs/developer-reference.md)** — the HTTP contract (`POST /generate`,
-`GET /styles`, `GET /health`), the JSON config file, the optional token gate, and the systemd unit.
+`GET /styles`, `GET /checkpoints`, `GET /health`), the JSON config file, the optional token gate, and
+the systemd unit.
 
 Quick facts: TypeScript on Node, run directly with `tsx` (no build step); Node's built-in HTTP
 server and `fetch` (no web framework, no runtime dependencies); file-based config only (no
