@@ -477,8 +477,19 @@
       const installed = Array.isArray(h.checkpoints) ? h.checkpoints : [];
       installedCheckpoints = installed;
       renderCompareList();
-      checkpointSel.innerHTML = "";
 
+      // Fetch the catalog BEFORE touching the <select>. Appending options after an await mutates the
+      // live option list, and a browser dismisses an OPEN native dropdown the instant its options
+      // change — which showed up as the Model menu "opening then snapping shut". So we gather all the
+      // data first, build the whole option list in a detached fragment, and swap it in with a single
+      // synchronous replaceChildren — never mutating the select across an async gap.
+      let cat = [];
+      try {
+        const res = await fetch("/checkpoints", { headers: authHeaders() });
+        if (res.ok) cat = (await res.json()).checkpoints || [];
+      } catch { /* no catalog — the installed list still renders */ }
+
+      const frag = document.createDocumentFragment();
       if (installed.length) {
         const g = document.createElement("optgroup");
         g.label = "Installed";
@@ -489,19 +500,15 @@
           if (name === defaultCheckpoint) opt.selected = true;
           g.appendChild(opt);
         }
-        checkpointSel.appendChild(g);
+        frag.appendChild(g);
       } else {
         const opt = document.createElement("option");
         opt.value = ""; opt.textContent = "(service default)";
-        checkpointSel.appendChild(opt);
+        frag.appendChild(opt);
       }
 
       // Catalog (by friendly name), including not-yet-downloaded entries.
-      try {
-        const res = await fetch("/checkpoints", { headers: authHeaders() });
-        if (!res.ok) return;
-        const cat = (await res.json()).checkpoints || [];
-        if (!cat.length) return;
+      if (cat.length) {
         const g = document.createElement("optgroup");
         g.label = "Catalog (by name)";
         for (const c of cat) {
@@ -512,36 +519,43 @@
           if (c.description) opt.title = c.description;
           g.appendChild(opt);
         }
-        checkpointSel.appendChild(g);
-      } catch { /* leave the installed list as-is */ }
+        frag.appendChild(g);
+      }
+
+      checkpointSel.replaceChildren(frag);
     }
 
     // Populate the style dropdown. On 401 (auth on, no/invalid token) show a hint instead of breaking.
     async function loadStyles() {
-      // Reset to just the prompt-only option before (re)loading.
-      styleSel.innerHTML = '<option value="">(none / prompt-only)</option>';
+      // Fetch first, then build the whole option list and swap it in with one synchronous
+      // replaceChildren. Appending options after the await would mutate the live <select> and dismiss
+      // an open dropdown mid-click (the same "snap shut" bug the Model menu had).
+      const frag = document.createDocumentFragment();
+      const promptOnly = document.createElement("option");
+      promptOnly.value = ""; promptOnly.textContent = "(none / prompt-only)";
+      frag.appendChild(promptOnly);
       try {
         const res = await fetch("/styles", { headers: authHeaders() });
         if (res.status === 401) {
           const opt = document.createElement("option");
           opt.value = ""; opt.textContent = "(styles need a token — enter one and click reload)";
           opt.disabled = true;
-          styleSel.appendChild(opt);
-          return;
+          frag.appendChild(opt);
+        } else if (res.ok) {
+          const body = await res.json();
+          availableStyles = (body.styles || []).map((s) => s.name);
+          for (const s of (body.styles || [])) {
+            const opt = document.createElement("option");
+            opt.value = s.name;
+            opt.textContent = s.name;
+            frag.appendChild(opt);
+          }
         }
-        if (!res.ok) return;
-        const body = await res.json();
-        availableStyles = (body.styles || []).map((s) => s.name);
-        for (const s of (body.styles || [])) {
-          const opt = document.createElement("option");
-          opt.value = s.name;
-          opt.textContent = s.name;
-          styleSel.appendChild(opt);
-        }
-        renderCompareList();
       } catch {
-        /* leave prompt-only option in place */
+        /* network error — fall through with just the prompt-only option */
       }
+      styleSel.replaceChildren(frag);
+      renderCompareList();
     }
 
     // ---- Compare mode -------------------------------------------------------------------
