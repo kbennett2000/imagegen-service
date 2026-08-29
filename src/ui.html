@@ -64,6 +64,13 @@
     input[type=range] { padding: 0; }
     .imgblock { border: 1px solid #e5e7eb; border-radius: .4rem; padding: .5rem .7rem; margin-top: .5rem; }
     .imgblock > label:first-child { margin-top: 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: .75rem; margin-top: .5rem; }
+    .cmpcell { border: 1px solid #d1d5db; border-radius: .4rem; padding: .5rem .6rem; }
+    .cmplabel { font-size: .8rem; font-weight: 700; margin-bottom: .35rem; word-break: break-all; }
+    label.cmp-toggle, label.cmp-item { display: flex; align-items: center; gap: .4rem; font-weight: 400; }
+    label.cmp-toggle input, label.cmp-item input { width: auto; }  /* opt out of input{width:100%} */
+    label.cmp-item { margin: .2rem 0; font-size: .8rem; }
   </style>
 </head>
 <body>
@@ -84,8 +91,26 @@
       <label for="style">Style</label>
       <select id="style"><option value="">(none / prompt-only)</option></select>
 
-      <label for="checkpoint">Model <span class="hint">(base checkpoint)</span></label>
-      <select id="checkpoint"><option value="">(loading…)</option></select>
+      <div id="checkpointRow">
+        <label for="checkpoint">Model <span class="hint">(base checkpoint)</span></label>
+        <select id="checkpoint"><option value="">(loading…)</option></select>
+      </div>
+
+      <label class="cmp-toggle"><input type="checkbox" id="compareToggle" /> Compare — generate one image per selected value</label>
+      <div class="imgblock" id="compareBox" hidden>
+        <label for="compareAxis" style="margin-top:0">Compare by</label>
+        <select id="compareAxis">
+          <option value="checkpoint">Model (base checkpoint)</option>
+          <option value="style">Style</option>
+          <option value="quality">Quality</option>
+        </select>
+        <label style="margin-top:.5rem">Values <span class="hint">(pick 2 or more)</span></label>
+        <div id="compareList"></div>
+        <p class="hint" id="compareHint" style="margin:.3rem 0 0">
+          Every image uses the same prompt &amp; settings — only the chosen axis varies.
+          A blank Seed picks one shared random seed so results are directly comparable.
+        </p>
+      </div>
 
       <div class="row">
         <div>
@@ -178,6 +203,8 @@
     <div class="result">
       <div id="meta" class="meta"></div>
       <div id="output"><div class="placeholder">The generated image will appear here.</div></div>
+      <div id="compareMeta" class="meta" hidden></div>
+      <div id="compareGrid" class="grid" hidden></div>
       <div id="useAs" hidden style="margin-top:.6rem; display:flex; gap:.5rem; flex-wrap:wrap">
         <button type="button" id="useAsInit" class="linkbtn">↑ Use as Starting image</button>
         <button type="button" id="useAsRef" class="linkbtn">↑ Use as Reference photo</button>
@@ -288,6 +315,11 @@
     let refImageB64 = null;  // IP-Adapter reference photo
     let lastGeneratedBlob = null; // the most recent /generate result, for the "use as…" buttons
     let stitchAvailable = false;  // whether the server has ffmpeg (from /health), gates Stitch
+    let installedCheckpoints = []; // installed checkpoint filenames (from /health), for compare mode
+    let availableStyles = [];      // style names (from /styles), for compare mode
+    let compareObjectUrls = [];    // per-cell object URLs for the compare grid, revoked on re-run
+    const compareToggleEl = $("compareToggle");
+    const compareAxisEl = $("compareAxis");
 
     // Read a chosen file, downscale to <=1024px on the long edge (keeps SDXL happy + the request
     // small), and return { b64, dataUrl }. b64 is the bare base64 PNG the API expects.
@@ -443,6 +475,8 @@
     async function populateCheckpoints(h) {
       defaultCheckpoint = h.checkpoint || "";
       const installed = Array.isArray(h.checkpoints) ? h.checkpoints : [];
+      installedCheckpoints = installed;
+      renderCompareList();
       checkpointSel.innerHTML = "";
 
       if (installed.length) {
@@ -497,16 +531,83 @@
         }
         if (!res.ok) return;
         const body = await res.json();
+        availableStyles = (body.styles || []).map((s) => s.name);
         for (const s of (body.styles || [])) {
           const opt = document.createElement("option");
           opt.value = s.name;
           opt.textContent = s.name;
           styleSel.appendChild(opt);
         }
+        renderCompareList();
       } catch {
         /* leave prompt-only option in place */
       }
     }
+
+    // ---- Compare mode -------------------------------------------------------------------
+    // Rebuild the value checklist for the chosen axis. Model = installed checkpoint filenames;
+    // Style = the loaded styles plus a "(no style)" sentinel (value ""); Quality = the three tiers.
+    function renderCompareList() {
+      const listEl = $("compareList");
+      if (!listEl) return;
+      const axis = compareAxisEl.value;
+      let items; // { value, label }
+      if (axis === "checkpoint") {
+        items = installedCheckpoints.map((f) =>
+          ({ value: f, label: f + (f === defaultCheckpoint ? "  (default)" : "") }));
+      } else if (axis === "style") {
+        items = [{ value: "", label: "(no style)" }]
+          .concat(availableStyles.map((n) => ({ value: n, label: n })));
+      } else {
+        items = ["fast", "standard", "high"].map((q) => ({ value: q, label: q }));
+      }
+      listEl.innerHTML = "";
+      if (!items.length || (axis === "checkpoint" && !installedCheckpoints.length)) {
+        const p = document.createElement("p");
+        p.className = "hint";
+        p.textContent = axis === "checkpoint"
+          ? "No installed checkpoints to compare yet."
+          : "Nothing to compare on this axis yet.";
+        listEl.appendChild(p);
+        return;
+      }
+      for (const it of items) {
+        const lab = document.createElement("label");
+        lab.className = "cmp-item";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "cmp-model";
+        cb.value = it.value;
+        cb.dataset.label = it.label;
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(" " + it.label));
+        listEl.appendChild(lab);
+      }
+    }
+
+    // Flip between single-generate and compare-grid views.
+    compareAxisEl.addEventListener("change", renderCompareList);
+    compareToggleEl.addEventListener("change", () => {
+      const on = compareToggleEl.checked;
+      $("compareBox").hidden = !on;
+      $("checkpointRow").hidden = on;
+      $("useAs").hidden = true;
+      if (on) {
+        clearError();
+        outputEl.hidden = true;
+        metaEl.hidden = true;
+        $("compareMeta").hidden = false;
+        $("compareGrid").hidden = false;
+      } else {
+        for (const u of compareObjectUrls) URL.revokeObjectURL(u);
+        compareObjectUrls = [];
+        $("compareGrid").innerHTML = "";
+        $("compareGrid").hidden = true;
+        $("compareMeta").hidden = true;
+        outputEl.hidden = false;
+        metaEl.hidden = false;
+      }
+    });
 
     // Re-fetch styles when a token is typed/pasted, so the dropdown fills once authorized.
     $("token").addEventListener("change", loadStyles);
@@ -550,22 +651,15 @@
     $("useAsRef").addEventListener("click", () => useGeneratedAs("ref"));
     $("useAsAnim").addEventListener("click", () => useGeneratedAs("anim"));
 
-    $("form").addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      clearError();
-      $("useAs").hidden = true; // hide until this render succeeds
-
-      const prompt = $("prompt").value.trim();
-      if (!prompt) { showError("Prompt is required."); return; }
-
-      // Build the body from non-empty fields only.
+    // Assemble the shared /generate body from the form — everything EXCEPT the base checkpoint, which
+    // the caller sets. Seed is included only when the field is non-blank (compare mode injects its own
+    // shared random seed when it's blank). Used by both single-generate and compare paths.
+    function buildGenerateBody(prompt) {
       const body = { prompt: prompt };
       const neg = $("negativePrompt").value.trim();
       if (neg) body.negativePrompt = neg;
       const style = styleSel.value;
       if (style) body.style = style;
-      const checkpoint = checkpointSel.value;
-      if (checkpoint && checkpoint !== defaultCheckpoint) body.checkpoint = checkpoint;
       body.quality = $("quality").value;
       const seedRaw = $("seed").value.trim();
       if (seedRaw !== "") body.seed = Number(seedRaw);
@@ -585,6 +679,118 @@
         body.references = [refImageB64];
         body.referenceStrength = Number($("refStrength").value);
       }
+      return body;
+    }
+
+    // Compare mode: generate one image per selected value of the chosen axis (Model/Style/Quality),
+    // reusing every other setting. Sequential — the GPU serializes and checkpoint swaps are heavy —
+    // with per-cell progress and isolated errors so one failure never aborts the rest.
+    async function runCompare(prompt) {
+      const axis = compareAxisEl.value;
+      const picked = [...document.querySelectorAll(".cmp-model:checked")]
+        .map((cb) => ({ value: cb.value, label: cb.dataset.label || cb.value }));
+      if (picked.length < 2) {
+        showError("Pick at least 2 values to compare (or turn off Compare).");
+        return;
+      }
+
+      const base = buildGenerateBody(prompt);
+      // Shared seed: a blank Seed field → one random seed reused across all cells, so only the chosen
+      // axis varies. A set seed is already in `base` from buildGenerateBody.
+      if ($("seed").value.trim() === "") base.seed = Math.floor(Math.random() * 4294967296);
+      const effectiveSeed = base.seed;
+
+      // Reset the grid: revoke old URLs and build one pending cell per value.
+      for (const u of compareObjectUrls) URL.revokeObjectURL(u);
+      compareObjectUrls = [];
+      const gridEl = $("compareGrid");
+      const cmpMetaEl = $("compareMeta");
+      gridEl.innerHTML = "";
+      const slots = picked.map((p) => {
+        const cell = document.createElement("div");
+        cell.className = "cmpcell";
+        const lab = document.createElement("div");
+        lab.className = "cmplabel";
+        lab.textContent = p.label;
+        const slot = document.createElement("div");
+        slot.className = "placeholder";
+        slot.textContent = "waiting…";
+        cell.appendChild(lab);
+        cell.appendChild(slot);
+        gridEl.appendChild(cell);
+        return slot;
+      });
+
+      const go = $("go");
+      go.disabled = true;
+      const label = go.textContent;
+      go.innerHTML = '<span class="spinner"></span>Comparing…';
+
+      try {
+        for (let i = 0; i < picked.length; i++) {
+          const p = picked[i];
+          cmpMetaEl.textContent = "Generating " + (i + 1) + "/" + picked.length + " — " + p.label + "…";
+          slots[i].innerHTML = '<span class="spinner"></span>rendering…';
+          const body = Object.assign({}, base);
+          if (axis === "checkpoint") body.checkpoint = p.value;
+          else if (axis === "quality") body.quality = p.value;
+          else if (axis === "style") { if (p.value) body.style = p.value; else delete body.style; }
+
+          const started = performance.now();
+          try {
+            const res = await fetch("/generate", {
+              method: "POST",
+              headers: authHeaders({ "content-type": "application/json" }),
+              body: JSON.stringify(body),
+            });
+            const elapsed = ((performance.now() - started) / 1000).toFixed(1);
+            if (!res.ok) {
+              slots[i].className = "err";
+              slots[i].textContent = "HTTP " + res.status + " — " + (await errorMessage(res));
+              continue;
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            compareObjectUrls.push(url);
+            const cell = slots[i].parentNode;
+            slots[i].remove();
+            const img = document.createElement("img");
+            img.className = "out";
+            img.src = url;
+            img.alt = p.label;
+            const m = document.createElement("div");
+            m.className = "meta";
+            m.textContent = "Done in " + elapsed + "s — " + Math.round(blob.size / 1024) +
+              " KB — seed " + effectiveSeed;
+            cell.appendChild(img);
+            cell.appendChild(m);
+          } catch (e) {
+            slots[i].className = "err";
+            slots[i].textContent = "Request failed: " + e;
+          }
+        }
+        cmpMetaEl.textContent = "Done — " + picked.length + " variations (seed " + effectiveSeed + ").";
+      } finally {
+        go.disabled = false;
+        go.textContent = label;
+      }
+    }
+
+    $("form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      clearError();
+      $("useAs").hidden = true; // hide until this render succeeds
+
+      const prompt = $("prompt").value.trim();
+      if (!prompt) { showError("Prompt is required."); return; }
+
+      if (compareToggleEl.checked) { await runCompare(prompt); return; }
+
+      // Build the body from non-empty fields only, then apply the single-model checkpoint rule.
+      const body = buildGenerateBody(prompt);
+      const checkpoint = checkpointSel.value;
+      if (checkpoint && checkpoint !== defaultCheckpoint) body.checkpoint = checkpoint;
+      const seedRaw = $("seed").value.trim();
 
       const go = $("go");
       go.disabled = true;
