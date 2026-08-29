@@ -24,7 +24,9 @@
 #
 # CivitAI note: civitai.com/api/download/models/<versionId> is the original source but is often
 # login-gated; when it is, verification fails and the ungated HF mirror (fallback) is used. That is
-# exactly the gating fall-through the spec calls for.
+# exactly the gating fall-through the spec calls for. Supplying a Civitai API key (ADR-0013:
+# --civitai-token / CIVITAI_TOKEN / install/secrets.env) lets the gated primary succeed directly —
+# the key is sent ONLY to civitai.com, never to the Hugging Face mirrors below.
 #
 # ---------------------------------------------------------------------------------------------
 # SDXL base + refiner + VAE — canonical, ungated Stability AI repos on Hugging Face.
@@ -44,10 +46,10 @@ loras|Lego_XL_v2.1.safetensors|https://huggingface.co/lordjia/lelo-lego-lora-for
 # sketch_style: no exact same-file mirror found; this is a FUNCTIONAL SUBSTITUTE (Linaqruf sketch
 # style XL, ungated, responds to the "sketch" trigger). Verified real .safetensors, ~47MB.
 loras|sketch_style.safetensors|https://huggingface.co/Linaqruf/sketch-style-xl-lora/resolve/main/sketch-style-xl.safetensors|-|25
-# watercolor-orie-xl: no confirmed same-file source located. Left unresolved on purpose — the
-# installer WARNs and continues; the "watercolour" style degrades to prompt-only until a URL is
-# supplied here. TODO(maintainer): fill in a verified source for watercolor-orie-xl.safetensors.
-loras|watercolor-orie-xl.safetensors|-|-|250
+# watercolor-orie-xl: the original -orie- file was never found on HF. SUBSTITUTE (ADR-0014): the
+# ungated Pomological Watercolor Redmond SDXL LoRA (artificialguybr), saved under this name. A real,
+# SFW watercolor LoRA (~228 MB); leans botanical-illustration watercolor. Trigger stays "watercolor".
+loras|watercolor-orie-xl.safetensors|https://huggingface.co/artificialguybr/pomological-watercolor-redmond-lora-for-sd-xl/resolve/main/PomologicalWatercolorRedmond.safetensors|-|200
 loras|animelora-sdxl.safetensors|https://civitai.com/api/download/models/140052|-|100
 loras|StoryBookRedmond-KidsRedmAF.safetensors|https://huggingface.co/artificialguybr/StoryBookRedmond/resolve/main/StoryBookRedmond-KidsRedmAF.safetensors|-|400
 loras|PixarXL.safetensors|https://huggingface.co/caldwecg/pixar/resolve/main/PixarXL.safetensors|-|130
@@ -56,3 +58,28 @@ loras|PixarXL.safetensors|https://huggingface.co/caldwecg/pixar/resolve/main/Pix
 loras|cyberpunk_xl_v1.safetensors|https://civitai.com/api/download/models/171178|-|100
 loras|Ukiyo-e-Art-XL.safetensors|https://civitai.com/api/download/models/154278|-|130
 loras|CLAYMATE-v2-sdxl.safetensors|https://huggingface.co/AI2lab/SDXL-loras/resolve/main/CLAYMATE_V2.03_.safetensors|https://huggingface.co/nerualdreming/Best_LoRas_Mar24/resolve/main/CLAYMATE_V2.03_.safetensors|600
+#
+# ---------------------------------------------------------------------------------------------
+# Curated SFW alternative base checkpoints (ADR-0014). Selectable via GET /checkpoints / the
+# `checkpoint` field on /generate (by friendly name or filename). All ungated Hugging Face repos;
+# full (non-distilled) SDXL, compatible with the stock sampler settings. ~6.9-7.1 GB each.
+# ---------------------------------------------------------------------------------------------
+checkpoints|RealVisXL_V5.0_fp16.safetensors|https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/main/RealVisXL_V5.0_fp16.safetensors|-|6000
+checkpoints|Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors|https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors|-|6000
+checkpoints|animagine-xl-3.1.safetensors|https://huggingface.co/cagliostrolab/animagine-xl-3.1/resolve/main/animagine-xl-3.1.safetensors|-|6000
+checkpoints|zavychromaxl_v100.safetensors|https://huggingface.co/misri/zavychromaxl_v100/resolve/main/zavychromaxl_v100.safetensors|-|6000
+#
+# ---------------------------------------------------------------------------------------------
+# Additional SFW style LoRAs (ADR-0014) — filenames/triggers/strengths in src/style-loras.ts.
+# All ungated Hugging Face repos, verified SFW SDXL LoRAs.
+# ---------------------------------------------------------------------------------------------
+loras|LineAniRedmondV2-Lineart-LineAniAF.safetensors|https://huggingface.co/artificialguybr/LineAniRedmond-LinearMangaSDXL-V2/resolve/main/LineAniRedmondV2-Lineart-LineAniAF.safetensors|-|100
+loras|ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors|https://huggingface.co/artificialguybr/ColoringBookRedmond-V2/resolve/main/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors|-|100
+loras|papercut.safetensors|https://huggingface.co/TheLastBen/Papercut_SDXL/resolve/main/papercut.safetensors|-|200
+loras|Miniature_Isometric_Objects_3d_SDXL.safetensors|https://huggingface.co/Pixelkram/isometric_sdxl_lora/resolve/main/Miniature_Isometric_Objects_3d_SDXL.safetensors|-|150
+loras|stained_glass_style_v1_sdxl.safetensors|https://huggingface.co/ostris/stained-glass-style-sdxl/resolve/main/stained_glass_style_v1_sdxl.safetensors|-|8
+loras|embroidered_style_v1_sdxl.safetensors|https://huggingface.co/ostris/embroidery_style_lora_sdxl/resolve/main/embroidered_style_v1_sdxl.safetensors|-|8
+loras|AmiguramiRedmond-Crochet-Amigurumi.safetensors|https://huggingface.co/artificialguybr/amigurami-redmond-amigurami-crochet-sd-xl-lora/resolve/main/AmiguramiRedmond-Crochet-Amigurumi.safetensors|-|150
+loras|vapor_graphic_sdxl.safetensors|https://huggingface.co/CiroN2022/vaporwave-graphic-sdxl-v10/resolve/main/vapor_graphic_sdxl.safetensors|-|100
+loras|PS1Redmond-PS1Game-Playstation1Graphics.safetensors|https://huggingface.co/artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl/resolve/main/PS1Redmond-PS1Game-Playstation1Graphics.safetensors|-|100
+loras|anime-nouveau-xl.safetensors|https://huggingface.co/Linaqruf/anime-nouveau-xl-lora/resolve/main/anime-nouveau-xl.safetensors|-|25

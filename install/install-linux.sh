@@ -13,9 +13,14 @@
 # Idempotent: safe to re-run. Every step checks what is already there and skips it.
 #
 # Usage:
-#   bash install/install-linux.sh            # full install (idempotent)
-#   bash install/install-linux.sh --check    # preflight ONLY: detect + report, change NOTHING
+#   bash install/install-linux.sh                       # full install (idempotent)
+#   bash install/install-linux.sh --check               # preflight ONLY: detect + report, change nothing
+#   bash install/install-linux.sh --civitai-token KEY   # Civitai API key for login-gated downloads
 #   bash install/install-linux.sh --help
+#
+# The Civitai API key (only needed for login-gated model downloads) can also come from a
+# CIVITAI_TOKEN env var or an install/secrets.env file — see install/secrets.env.example.
+# Precedence: --civitai-token flag > CIVITAI_TOKEN env > install/secrets.env file.
 #
 set -uo pipefail
 
@@ -39,6 +44,13 @@ DRIVER_LINK="https://www.nvidia.com/Download/index.aspx"
 CHECK_ONLY=0
 SKIPPED_MODELS=()          # dest filenames that could not be fetched (styles that degrade)
 
+# Civitai API token for gated model downloads (see install/secrets.env.example). Resolved after arg
+# parsing, precedence: --civitai-token flag > $CIVITAI_TOKEN env > install/secrets.env file. Capture
+# any inherited env value now, BEFORE we take over the variable name for our own resolved token.
+SECRETS_FILE="$SCRIPT_DIR/secrets.env"
+CIVITAI_TOKEN_FROM_ENV="${CIVITAI_TOKEN:-}"
+CIVITAI_TOKEN=""
+
 # ------------------------------------------------------------------------------------------------
 # Output helpers (plain language, no jargon in the happy path)
 # ------------------------------------------------------------------------------------------------
@@ -61,15 +73,40 @@ die() {
 # ------------------------------------------------------------------------------------------------
 # Arg parsing
 # ------------------------------------------------------------------------------------------------
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --check|--dry-run) CHECK_ONLY=1 ;;
+    --civitai-token)
+      shift; [ $# -gt 0 ] || die "--civitai-token requires a value (your Civitai API key)."
+      CIVITAI_TOKEN="$1" ;;
+    --civitai-token=*) CIVITAI_TOKEN="${1#*=}" ;;
     -h|--help)
-      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
-    *) die "unknown option: $arg" "Run with --help to see valid options." ;;
+    *) die "unknown option: $1" "Run with --help to see valid options." ;;
   esac
+  shift
 done
+
+# Resolve the Civitai token: flag (set above) > inherited env > secrets file. Only the file is
+# parsed here; the flag/env are already captured. The token is used ONLY for civitai.com downloads.
+resolve_civitai_token() {
+  [ -n "$CIVITAI_TOKEN" ] && return 0
+  if [ -n "$CIVITAI_TOKEN_FROM_ENV" ]; then CIVITAI_TOKEN="$CIVITAI_TOKEN_FROM_ENV"; return 0; fi
+  [ -f "$SECRETS_FILE" ] || return 0
+  local line val
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      \#*|'') continue ;;
+      CIVITAI_TOKEN=*)
+        val="${line#CIVITAI_TOKEN=}"
+        val="${val%$'\r'}"                          # strip a trailing CR (CRLF files)
+        val="${val#[\"\']}"; val="${val%[\"\']}"    # strip one pair of surrounding quotes
+        CIVITAI_TOKEN="$val" ;;
+    esac
+  done < "$SECRETS_FILE"
+}
+resolve_civitai_token
 
 # ================================================================================================
 # 1. PREFLIGHT / DRIVER GATE
@@ -275,13 +312,22 @@ verify_safetensors() {
   return 0
 }
 
-# fetch <url> <dest-tmp> -> 0 on a successful HTTP download (follows redirects).
+# fetch <url> <dest-tmp> -> 0 on a successful HTTP download (follows redirects). For civitai.com
+# URLs a "Authorization: Bearer <token>" header is added when a token is configured — never for any
+# other host, so the token cannot leak to Hugging Face or a mirror.
 fetch() {
   local url="$1" tmp="$2"
+  local auth=()
+  case "$url" in
+    https://civitai.com/*|http://civitai.com/*|https://*.civitai.com/*|http://*.civitai.com/*)
+      [ -n "$CIVITAI_TOKEN" ] && auth=(-H "Authorization: Bearer $CIVITAI_TOKEN") ;;
+  esac
   if command -v curl >/dev/null 2>&1; then
-    curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 -o "$tmp" "$url"
+    curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 "${auth[@]}" -o "$tmp" "$url"
   else
-    wget -q --tries=3 -O "$tmp" "$url"
+    local wauth=()
+    [ "${#auth[@]}" -gt 0 ] && wauth=(--header="Authorization: Bearer $CIVITAI_TOKEN")
+    wget -q --tries=3 "${wauth[@]}" -O "$tmp" "$url"
   fi
 }
 
@@ -313,6 +359,7 @@ download_verify() {
 install_models() {
   step "Step 3/5 — Downloading models (SDXL + LoRAs)"
   [ -f "$MANIFEST" ] || die "Model manifest not found at $MANIFEST"
+  [ -n "$CIVITAI_TOKEN" ] && ok "Using a Civitai API token for login-gated downloads"
   local subdir fn primary fallback minmb
   while IFS='|' read -r subdir fn primary fallback minmb; do
     case "$subdir" in ''|\#*) continue ;; esac

@@ -1,69 +1,63 @@
 # Handoff
 
 ## Current state
-**Multi-model video dispatch + LTX-Video — Slice 3 of the "wide variety of SFW models" effort
-(ADR-0015, PR open for review; based on current master, independent of Slices 1/2).** `/animate` was
-Wan-only; it now dispatches across video models by a `model` id. **Wan behavior is byte-identical and
-the default — no caller breaks.**
+**Image model catalog + checkpoint selection — Slice 2 of the "wide variety of SFW models" effort
+(ADR-0014, PR open for review; stacked on the ADR-0013 Civitai branch).** Adds a curated set of SFW
+base checkpoints and 10 more style LoRAs, plus the machinery to pick and discover them.
 
-- **Registry** `src/video-models.ts`: `VIDEO_MODELS: Record<AnimateModel, VideoModelSpec>`. A spec =
-  `{label, files (loaderClass/inputName/file/subdir to preflight), fetchHint, render(params)->graph}`.
-  Pure data + renderers; imports no engine code (no cycle).
-- **Dispatch**: `animateImage` resolves the spec from `params.model` (default `wan-5b`), preflights
-  `spec.files` via a generalized `videoModelsMissing(base, fetchFn, files)`, renders via `spec.render`.
-  The transport (upload → /prompt → poll by own id → /view), never-throw, and 20-min timeout are
-  unchanged. `wanModelsMissing` kept as a thin wrapper (smoke script + tests).
-- **Validation**: `parseAnimateBody` 422s a `model` not in `ANIMATE_MODELS`.
-- **New model `ltxv`** — LTX-Video 2B: `src/ltxv-workflow.ts` + `src/workflows/ltxv-i2v.json`
-  (CheckpointLoaderSimple + CLIPLoader type=ltxv → LTXVImgToVideo → LTXVConditioning/LTXVScheduler +
-  KSamplerSelect → SamplerCustom → VAEDecode → CreateVideo/SaveVideo). LTX grid: dims ×32,
-  **frames 8n+1** (Wan is 4k+1); defaults 768×512, 97 frames, 24 fps. Two files (checkpoint bundles
-  its VAE + a separate T5), both ungated HF → `scripts/fetch-ltxv-models.ts` (pure-HF, reuses the wan
-  script's `planDownloads`; ~11.5 GB). Sizes HF-API-verified.
-- **Tests:** `npm run test:unit` → **130 pass** (116 prior + `video-models.test` + LTX animate/fetch
-  tests). `process.env` absent from `src/`; no runtime deps. Mock advertises the LTX files by default.
-- **NOT render-verified here** (no weights/nodes on this box) — like the Wan foundation, the LTX
-  template's node ids/classes/sampler come from the canonical ComfyUI LTXV i2v template; a
-  real-ComfyUI smoke check is the remaining step. Wan 2.2 14B deferred (dual-expert complexity).
-- **Branch note:** based on current master (has `/animate`); Slices 1/2 were off older master and are
-  independent PRs. This slice needs no Civitai auth (LTX is ungated HF).
+- **Checkpoint catalog** (`src/checkpoints.ts`): friendly-name → filename map (like `style-loras.ts`).
+  4 full SFW SDXL checkpoints — `realvisxl`, `juggernaut`, `animagine`, `zavychroma` (all ungated HF,
+  ~7 GB, compatible with the stock cfg-7/25-step sampler). **Turbo/Lightning deliberately excluded** —
+  they need ~4-8 steps/low cfg the current tiers don't provide.
+- **Selection**: `/generate`'s `checkpoint` accepts a catalog **name** OR a raw filename
+  (`resolveCheckpoint` maps names, passes filenames through — backward compatible). Only node "4" is
+  injected; the SDXL refiner (node "11") is untouched, so quality=high still works.
+- **Discovery**: new `GET /checkpoints` (gated like `/styles`, never throws) lists
+  `{name,file,description,installed}` from the live object_info probe; `/health` gains
+  `checkpointsInstalled`.
+- **10 new style LoRAs** in `STYLE_LORAS`: line art, coloring book, papercut, isometric, stained
+  glass, embroidery, amigurumi, vaporwave, low-poly, art nouveau (all ungated HF, verified SFW). Also
+  **fixed the long-broken `watercolour`** source (was `-|-`, now the ungated Pomological Watercolor
+  LoRA saved under `watercolor-orie-xl.safetensors`). Styles total **22**.
+- **Manifest**: 4 checkpoint + 11 lora source lines added/fixed in `install/models.manifest` (all HF
+  `resolve/main`, verified via the HF API for existence + size). No installer code change needed.
+- **Tests:** `npm run test:unit` → **108 pass** (98 prior + 5 `checkpoints.test` + 5 `server.test`).
+  `/styles` count assertion is now derived from `STYLE_LORAS` (not hardcoded). `process.env` absent
+  from `src/`; no runtime deps. Docs updated (ADR-0014, developer-reference, README styles table).
+- **Note:** models are referenced by name; the ~28 GB of new checkpoints are downloaded by the
+  installer on the ComfyUI box, not committed here. `/checkpoints` shows `installed:false` until then.
+- **Next:** Slice 3 = multi-model video dispatch + a 2nd video model (ADR-0015).
 
-### Prior — POST /animate — Wan 2.2 image-to-video endpoint (ADR-0009)
-**POST /animate — Wan 2.2 image-to-video endpoint (ADR-0009, PR open for review).** Cycle 2 of 2.
-Exposes the ADR-0008 pipeline through the service: a still + prompt in → mp4 bytes out. **`generateImage`,
-the SDXL templates, and the `/generate` path are untouched** — the video path is purely additive.
+### Prior — Civitai-authenticated model downloads (ADR-0013)
+**Civitai-authenticated model downloads — Slice 1 of the "wide variety of SFW models" effort
+(ADR-0013, PR open for review).** Foundation only: the download path can now authenticate to
+Civitai's gated endpoints, so later slices can add gated checkpoints/LoRAs/video models. **No `src/`
+runtime behavior changed — the token is a download-time secret.**
 
-- **Endpoint** `POST /animate` (auth-gated like `/generate`): JSON `{ image (base64, required), prompt
-  (required), negativePrompt?, seed?, width?, height?, frames?, fps? }` → `video/mp4` (200/422/503).
-  `parseAnimateBody` validates (frames `[1,121]`, fps `[1,120]`, dims `[256,2048]` int); the engine
-  owns the ×32 / 4k+1 snapping. `sendBytes` returns the video with its derived content-type.
-- **Engine** `animateImage` (in `src/engine.ts`, beside `generateImage`, reusing its transport):
-  preflight `wanModelsMissing` (hard fail → 503 with the exact files to fetch, since animation can't
-  degrade), upload still, `renderWanWorkflow`, POST /prompt → poll by own prompt_id → /view. **20-min
-  poll budget** (`ANIMATE_TIMEOUT_MS`) absorbs the render + the SDXL↔Wan model-load pause; longer /view
-  timeout for the multi-MB mp4. Generalized `findOutputFile` (SaveVideo's output key varies by build)
-  + `contentTypeFor`. Refactored the three `listX` probes onto a shared `objectInfoOptions`.
-- **/health** gained `wan: { ready, missing }` (best-effort; skipped when ComfyUI unreachable).
-- **Tests:** `npm run test:unit` → **101 pass** (89 prior + 12 new: animate happy-path/param-flow/
-  missing-models/exec-error, wanModelsMissing, and server 200/422×2/503/401→200/health). MockComfy now
-  advertises the Wan loaders (UNETLoader/CLIPLoader/VAELoader, defaults present, settable empty) + an
-  `outputFilename` override for the video content-type path. `process.env` still absent from `src/`.
-- **Verified live against real ComfyUI** (models NOT downloaded on this box): ran the updated server on
-  an ephemeral port (the systemd instance on :8189 still runs old code — see below). `/health` →
-  `wan.ready:false` listing all three missing files; `POST /animate` → **503** with the actionable
-  message; missing-image → **422**. Correct, honest, no fabricated render.
-- **⚠️ The running service on :8189 is a systemd unit (`imagegen-service.service`, enabled) serving the
-  repo working tree, still on OLD code.** Restarting it needs sudo, which the headless cycle lacks
-  (`sudo -n` → "interactive authentication required"). To pick up this branch after merge, a human runs:
-  `sudo systemctl restart imagegen-service`. (No code change needed — it runs `tsx src/index.ts` from
-  the working tree.)
-- **To actually render video:** update ComfyUI → `npx tsx scripts/fetch-wan22-models.ts` → restart
-  ComfyUI → `POST /animate` (or `scripts/smoke-wan22.ts` to bypass the service).
-- **Future:** 14B-GGUF as a higher-quality tier (ADR-0008); an async job API only if concurrent/batch
-  animation becomes real (ADR-0009 chose synchronous to match `/generate`).
+- **Token, three sources, precedence flag > env > file.** `--civitai-token` /
+  `-CivitaiToken` (Windows) > `CIVITAI_TOKEN` env (installers only) > `install/secrets.env`
+  (gitignored KEY=VALUE file; committed template `install/secrets.env.example`; added to `.gitignore`).
+  The `src/` no-env invariant is preserved — the token lives only in the installer/`scripts/` layer,
+  and the TS helper parses the **file**, never `process.env`.
+- **Bearer header, civitai.com ONLY.** `Authorization: Bearer <token>` is attached only when the URL
+  host is `civitai.com`/subdomain AND a token is set — never for Hugging Face or any other host
+  (look-alikes like `civitai.com.evil` are rejected). Verified by unit tests + a standalone bash
+  harness.
+- **Files:** `scripts/lib/civitai.ts` (pure helpers: `parseCivitaiToken`, `readCivitaiTokenFile`,
+  `resolveCivitaiToken`, `isCivitaiUrl`, `civitaiCurlArgs`) + `test/civitai.test.ts` (9 cases).
+  `install/install-linux.sh` (while-loop arg parse, `resolve_civitai_token`, `fetch` header) and
+  `install/install-windows.ps1` (`-CivitaiToken` param, resolution, `Get-File` header) get parity.
+  `scripts/fetch-wan22-models.ts` is wired to the helper (no-op for its HF URLs). Docs updated
+  (developer-reference, install-ubuntu/windows, models.manifest note).
+- **Tests:** `npm run test:unit` → **98 pass** (89 prior + 9 civitai). `grep -rn process.env src/`
+  empty; no runtime `dependencies`. `bash -n` clean; `--help` verified. (No `pwsh` on this box — the
+  PowerShell twin was written for parity but not executed here.)
+- **Next slices (independent, both build on this one):** Slice 2 = expanded image catalog +
+  `/checkpoints` selection machinery (ADR-0014); Slice 3 = multi-model video dispatch + a second
+  video model, e.g. LTX-Video (ADR-0015). See the approved plan.
 
-### Prior — Wan 2.2 image-to-video foundation (ADR-0008, merged PR #21)
-Cycle 1 of 2 — proves the
+### Prior — Wan 2.2 image-to-video foundation (ADR-0008)
+**Wan 2.2 image-to-video foundation (ADR-0008, PR open for review).** Cycle 1 of 2 — proves the
 image-to-video pipeline OUTSIDE the service before Cycle 2 adds a `POST /animate` endpoint. **No
 existing endpoint, SDXL template, or engine path changed.**
 

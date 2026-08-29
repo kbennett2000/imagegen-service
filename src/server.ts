@@ -20,6 +20,7 @@ import {
   type Quality,
 } from "./engine.js";
 import { STYLE_LORAS } from "./style-loras.js";
+import { CHECKPOINTS, resolveCheckpoint } from "./checkpoints.js";
 import { ffmpegAvailable as ffmpegAvailableDefault, stitchVideos as stitchVideosDefault, type StitchResult } from "./stitch.js";
 import { MAX_FRAMES } from "./wan-workflow.js";
 import { ANIMATE_MODELS, isAnimateModel } from "./video-models.js";
@@ -387,11 +388,9 @@ async function handleGenerate(
     sendJson(res, 422, { error: parsed.error });
     return;
   }
-  // Apply the configured default checkpoint when the request didn't specify one (precedence:
-  // request > config > workflow-template default).
-  if (!parsed.params.checkpoint && config.comfyui.checkpoint) {
-    parsed.params.checkpoint = config.comfyui.checkpoint;
-  }
+  // Resolve the checkpoint (precedence: request > config > workflow-template default). A friendly
+  // catalog name (e.g. "dreamshaper") maps to its ComfyUI filename; a raw filename passes through.
+  parsed.params.checkpoint = resolveCheckpoint(parsed.params.checkpoint || config.comfyui.checkpoint);
   // Same for the upscale model when an upscale was requested without naming one (the engine falls
   // back to the first installed model if this is still empty).
   if (parsed.params.upscale && !parsed.params.upscaleModel && config.comfyui.upscaleModel) {
@@ -479,6 +478,23 @@ function handleStyles(res: ServerResponse): void {
   });
 }
 
+// GET /checkpoints — the curated SFW checkpoint catalog, each flagged with whether its file is
+// actually installed on the fronted ComfyUI. probeComfy never throws (empty lists on failure), so
+// `installed` degrades to false rather than erroring.
+async function handleCheckpoints(res: ServerResponse, config: Config, fetchFn: FetchFn): Promise<void> {
+  const { checkpoints: installed } = await probeComfy(config.comfyui.url, fetchFn);
+  const checkpoints = Object.entries(CHECKPOINTS).map(([name, info]) => ({
+    name,
+    file: info.file,
+    description: info.description,
+    installed: installed.includes(info.file),
+  }));
+  sendJson(res, 200, {
+    checkpoints,
+    note: "Any checkpoint installed in ComfyUI's models/checkpoints/ also works by exact filename via the `checkpoint` field on /generate.",
+  });
+}
+
 async function handleHealth(
   res: ServerResponse,
   config: Config,
@@ -489,6 +505,9 @@ async function handleHealth(
   // Report which recipe LoRAs are actually present on the GPU host.
   const recipeFiles = Array.from(new Set(Object.values(STYLE_LORAS).map((r) => r.loraFile)));
   const lorasLoaded = recipeFiles.filter((f) => loras.includes(f));
+  // Same for the curated checkpoint catalog: which of its files are actually installed.
+  const catalogCheckpoints = Array.from(new Set(Object.values(CHECKPOINTS).map((c) => c.file)));
+  const checkpointsInstalled = catalogCheckpoints.filter((f) => checkpoints.includes(f));
   // The effective default checkpoint (config override, else the workflow template's), plus the full
   // list ComfyUI can load so a client can offer a picker.
   const checkpoint = config.comfyui.checkpoint || DEFAULT_CHECKPOINT;
@@ -506,6 +525,7 @@ async function handleHealth(
     lorasLoaded,
     checkpoint,
     checkpoints,
+    checkpointsInstalled,
     upscaleModel,
     upscaleModels,
     wan: { ready: wanMissing.length === 0, missing: wanMissing },
@@ -559,6 +579,14 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch, deps: Ser
             return;
           }
           handleStyles(res);
+          return;
+        }
+        if (method === "GET" && url === "/checkpoints") {
+          if (!isAuthorized(req, config)) {
+            sendJson(res, 401, { error: "unauthorized" });
+            return;
+          }
+          await handleCheckpoints(res, config, fetchFn);
           return;
         }
         // /health is intentionally NEVER gated — monitoring must work without the token.

@@ -77,6 +77,12 @@ system, setting up the drawing engine, downloading the models, and starting ever
 You can safely **re-run this same command** any time. It skips whatever is already done, so
 re-running never breaks anything — handy if your internet drops mid-download.
 
+> **Optional — a Civitai key for a few extra art styles.** Most models download without any account.
+> A few art styles come from [Civitai](https://civitai.com), which sometimes requires a (free) key to
+> download. If the installer says it skipped a style, you can add your key and re-run:
+> `bash install/install-linux.sh --civitai-token YOUR_KEY` (get a key at your Civitai account →
+> API Keys). Everything works without it — those few styles just fall back to a plain look.
+
 > **You may be asked for your password.** Near the end, the installer sets things up to start
 > automatically every time you turn the computer on. That step needs your permission, so Ubuntu may
 > ask for your login password. That's expected.

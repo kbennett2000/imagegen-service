@@ -11,6 +11,9 @@
 # Local runtime config (secrets/host-specific) — the committed template is config.example.json
 /config.json
 
+# Download-time secrets (Civitai API token) — the committed template is install/secrets.env.example
+/install/secrets.env
+
 # Local generated output from manual verification
 /out.png
 

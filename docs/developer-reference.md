@@ -101,6 +101,29 @@ cp config.example.json config.json
 - **`server.port`** — defaults to `8189` (sits next to ComfyUI's `8188`).
 - **`auth`** — optional shared-token gate, **off by default**. See below.
 
+## Downloading models (Civitai API key)
+
+The model files are fetched by the platform installers from
+[`install/models.manifest`](../install/models.manifest). Some sources are on Civitai, whose download
+endpoints are often login-gated. To let those succeed, supply a Civitai API key
+([get one here](https://civitai.com/user/account) → API Keys) any of three ways — precedence
+**flag > env > file**:
+
+```bash
+# 1. flag
+bash install/install-linux.sh --civitai-token <key>
+# 2. environment variable (shell installer only)
+CIVITAI_TOKEN=<key> bash install/install-linux.sh
+# 3. a gitignored file (copy the template, then fill it in)
+cp install/secrets.env.example install/secrets.env   # then set CIVITAI_TOKEN=<key>
+```
+
+On Windows use `-CivitaiToken <key>` instead of the flag. The key is a **download-time** secret: it
+is used **only** for `civitai.com` downloads (never sent to Hugging Face or any other host), it is
+**never** read by the running service (the `src/` no-env invariant is preserved), and
+`install/secrets.env` is git-ignored. Without a key, gated Civitai sources simply fall back to their
+Hugging Face mirror, exactly as before. See ADR-0013.
+
 ## Authentication
 
 Optional shared-token auth, **disabled by default** (ADR-0002). With `auth.enabled: false` the
@@ -172,11 +195,13 @@ curl -X POST http://localhost:8189/generate \
 
 #### Base checkpoint override
 
-`checkpoint` selects the base SDXL model for this request, named exactly as ComfyUI lists it
-(see `GET /health` for the installed list). Notes:
+`checkpoint` selects the base SDXL model for this request. It accepts **either a friendly catalog
+name** (e.g. `"dreamshaper"` — see `GET /checkpoints`) **or the exact ComfyUI filename** (see
+`GET /health` for the installed list). Notes:
 
 - Precedence is **request `checkpoint` > `config.comfyui.checkpoint` > the workflow template's
-  built-in checkpoint**. Omit it to use the configured/default model.
+  built-in checkpoint**. Omit it to use the configured/default model. A catalog name resolves to its
+  filename; anything else is passed to ComfyUI as-is.
 - Only the **base** checkpoint is overridden. At `quality: "high"` the SDXL **refiner** stays stock
   (`sd_xl_refiner_1.0.safetensors`); a custom base not paired with that refiner is best used at
   `fast`/`standard`.
@@ -317,10 +342,34 @@ curl -H 'Authorization: Bearer choose-a-long-random-string' http://localhost:818
   "note": "Styles not listed here are accepted by /generate and rendered prompt-only (no LoRA)." }
 ```
 
-The 12 preset styles are `pixel art`, `oil painting`, `comic book`, `lego-style`, `pencil sketch`,
-`watercolour`, `anime`, `storybook`, `3d`, `cyberpunk`, `ukiyo-e`, and `claymation`. Names are
-matched case-insensitively. `noir` and `ghibli` are intentionally prompt-only (no reliable base-SDXL
-LoRA).
+The preset styles are `pixel art`, `oil painting`, `comic book`, `lego-style`, `pencil sketch`,
+`watercolour`, `anime`, `storybook`, `3d`, `cyberpunk`, `ukiyo-e`, `claymation`, `line art`,
+`coloring book`, `papercut`, `isometric`, `stained glass`, `embroidery`, `amigurumi`, `vaporwave`,
+`low-poly`, and `art nouveau`. Names are matched case-insensitively. `noir` and `ghibli` are
+intentionally prompt-only (no reliable base-SDXL LoRA).
+
+### `GET /checkpoints`
+
+Lists the curated SFW base-model catalog. Each entry is `{ name, file, description, installed }`,
+where `installed` reflects whether the file is actually loaded on the fronted ComfyUI. Pass a `name`
+in `/generate`'s `checkpoint` field (or the exact `file`). Gated by the token when auth is enabled.
+
+```bash
+curl http://localhost:8189/checkpoints
+```
+
+```json
+{ "checkpoints": [
+    { "name": "realvisxl", "file": "RealVisXL_V5.0_fp16.safetensors",
+      "description": "Photorealistic people and scenes (RealVis XL v5).", "installed": true }
+  ],
+  "note": "Any checkpoint installed in ComfyUI's models/checkpoints/ also works by exact filename via the `checkpoint` field on /generate." }
+```
+
+The catalog names are `realvisxl` (photoreal people/scenes), `juggernaut` (photoreal all-rounder),
+`animagine` (anime), and `zavychroma` (cinematic fantasy) — all full SFW SDXL checkpoints. The files
+are downloaded by the installer (see [`install/models.manifest`](../install/models.manifest)); a
+catalog entry with `installed: false` just hasn't been downloaded on this box yet.
 
 ### `GET /health`
 
