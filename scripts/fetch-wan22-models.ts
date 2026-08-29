@@ -18,6 +18,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { civitaiCurlArgs, resolveCivitaiToken } from "./lib/civitai.ts";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
 export interface ModelSpec {
   file: string;
   subdir: string; // ComfyUI models subdir (diffusion_models / vae / text_encoders)
@@ -84,21 +88,26 @@ function safeStat(p: string): { size: number } | undefined {
   }
 }
 
-function parseArgs(argv: string[]): { modelsRoot: string; dryRun: boolean } {
+function parseArgs(argv: string[]): { modelsRoot: string; dryRun: boolean; civitaiToken: string } {
   let modelsRoot = path.join(os.homedir(), "comfyui", "models");
   let dryRun = false;
+  let civitaiToken = "";
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--models-root") {
       const next = argv[++i];
       if (!next) throw new Error("--models-root requires a directory argument");
       modelsRoot = path.resolve(next);
+    } else if (argv[i] === "--civitai-token") {
+      const next = argv[++i];
+      if (!next) throw new Error("--civitai-token requires a value");
+      civitaiToken = next;
     } else if (argv[i] === "--dry-run") {
       dryRun = true;
     } else {
       throw new Error(`unknown argument: ${argv[i]}`);
     }
   }
-  return { modelsRoot, dryRun };
+  return { modelsRoot, dryRun, civitaiToken };
 }
 
 function humanGB(bytes: number): string {
@@ -106,7 +115,10 @@ function humanGB(bytes: number): string {
 }
 
 function main(): void {
-  const { modelsRoot, dryRun } = parseArgs(process.argv.slice(2));
+  const { modelsRoot, dryRun, civitaiToken } = parseArgs(process.argv.slice(2));
+  // The Wan files are all on Hugging Face, so this token is normally unused; it is wired in so a
+  // Civitai-sourced mirror would authenticate. Resolved from the flag, else install/secrets.env.
+  const token = resolveCivitaiToken(REPO_ROOT, civitaiToken);
   console.log(`ComfyUI models root: ${modelsRoot}`);
   const plans = planDownloads(WAN_MODELS, modelsRoot, safeStat);
 
@@ -131,7 +143,7 @@ function main(): void {
     // on an HTTP error instead of writing an HTML error page over the model.
     const res = spawnSync(
       "curl",
-      ["-L", "-f", "-C", "-", "--create-dirs", "-o", plan.dest, plan.spec.url],
+      ["-L", "-f", "-C", "-", ...civitaiCurlArgs(plan.spec.url, token), "--create-dirs", "-o", plan.dest, plan.spec.url],
       { stdio: "inherit" },
     );
     if (res.status !== 0) {

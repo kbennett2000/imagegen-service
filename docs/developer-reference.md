@@ -101,6 +101,29 @@ cp config.example.json config.json
 - **`server.port`** — defaults to `8189` (sits next to ComfyUI's `8188`).
 - **`auth`** — optional shared-token gate, **off by default**. See below.
 
+## Downloading models (Civitai API key)
+
+The model files are fetched by the platform installers from
+[`install/models.manifest`](../install/models.manifest). Some sources are on Civitai, whose download
+endpoints are often login-gated. To let those succeed, supply a Civitai API key
+([get one here](https://civitai.com/user/account) → API Keys) any of three ways — precedence
+**flag > env > file**:
+
+```bash
+# 1. flag
+bash install/install-linux.sh --civitai-token <key>
+# 2. environment variable (shell installer only)
+CIVITAI_TOKEN=<key> bash install/install-linux.sh
+# 3. a gitignored file (copy the template, then fill it in)
+cp install/secrets.env.example install/secrets.env   # then set CIVITAI_TOKEN=<key>
+```
+
+On Windows use `-CivitaiToken <key>` instead of the flag. The key is a **download-time** secret: it
+is used **only** for `civitai.com` downloads (never sent to Hugging Face or any other host), it is
+**never** read by the running service (the `src/` no-env invariant is preserved), and
+`install/secrets.env` is git-ignored. Without a key, gated Civitai sources simply fall back to their
+Hugging Face mirror, exactly as before. See ADR-0013.
+
 ## Authentication
 
 Optional shared-token auth, **disabled by default** (ADR-0002). With `auth.enabled: false` the

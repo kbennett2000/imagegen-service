@@ -24,7 +24,9 @@
 #
 # CivitAI note: civitai.com/api/download/models/<versionId> is the original source but is often
 # login-gated; when it is, verification fails and the ungated HF mirror (fallback) is used. That is
-# exactly the gating fall-through the spec calls for.
+# exactly the gating fall-through the spec calls for. Supplying a Civitai API key (ADR-0013:
+# --civitai-token / CIVITAI_TOKEN / install/secrets.env) lets the gated primary succeed directly —
+# the key is sent ONLY to civitai.com, never to the Hugging Face mirrors below.
 #
 # ---------------------------------------------------------------------------------------------
 # SDXL base + refiner + VAE — canonical, ungated Stability AI repos on Hugging Face.

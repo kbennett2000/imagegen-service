@@ -14,11 +14,18 @@
   Usage (open PowerShell, then):
     powershell -ExecutionPolicy Bypass -File install\install-windows.ps1           # full install
     powershell -ExecutionPolicy Bypass -File install\install-windows.ps1 -Check    # preflight only
+    powershell -ExecutionPolicy Bypass -File install\install-windows.ps1 -CivitaiToken KEY
+
+  A Civitai API key (only needed for login-gated model downloads) may be passed with -CivitaiToken,
+  or set via a CIVITAI_TOKEN environment variable, or an install\secrets.env file (see
+  install\secrets.env.example). Precedence: -CivitaiToken > CIVITAI_TOKEN env > secrets.env file.
+  It is used ONLY for civitai.com downloads — never sent to Hugging Face or any other host.
 #>
 [CmdletBinding()]
 param(
   [switch]$Check,
-  [Alias('DryRun')][switch]$DryRunAlias
+  [Alias('DryRun')][switch]$DryRunAlias,
+  [string]$CivitaiToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,6 +50,27 @@ $DriverLink  = 'https://www.nvidia.com/Download/index.aspx'
 $NssmUrl     = 'https://nssm.cc/release/nssm-2.24.zip'
 $NssmDir     = Join-Path $ComfyDir 'nssm'
 $Script:Skipped = @()
+
+# Civitai API token for login-gated downloads (see secrets.env.example). Precedence:
+#   -CivitaiToken param > $env:CIVITAI_TOKEN > install\secrets.env file. Used only for civitai.com.
+$SecretsFile = Join-Path $ScriptDir 'secrets.env'
+$Script:CivitaiToken = ''
+if ($CivitaiToken)          { $Script:CivitaiToken = $CivitaiToken }
+elseif ($env:CIVITAI_TOKEN) { $Script:CivitaiToken = $env:CIVITAI_TOKEN }
+elseif (Test-Path $SecretsFile) {
+  foreach ($line in Get-Content -LiteralPath $SecretsFile) {
+    $t = $line.Trim()
+    if ($t -eq '' -or $t.StartsWith('#')) { continue }
+    if ($t -match '^\s*CIVITAI_TOKEN\s*=\s*(.*)$') {
+      $v = $Matches[1].Trim()
+      if ($v.Length -ge 2 -and (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'")))) {
+        $v = $v.Substring(1, $v.Length - 2)
+      }
+      $Script:CivitaiToken = $v
+      break
+    }
+  }
+}
 
 # ------------------------------------------------------------------------------------------------
 # Output helpers (plain language)
@@ -278,11 +306,25 @@ function Test-Safetensors ($path, $minMB) {
 }
 
 function Get-File ($url, $dest) {
+  # Attach the Civitai Bearer token ONLY for civitai.com (and subdomains) — never for any other host.
+  $useAuth = $Script:CivitaiToken -and `
+    ($url -match '^https?://civitai\.com/' -or $url -match '^https?://[^/]+\.civitai\.com/')
   if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-    & curl.exe -fL --retry 3 --retry-delay 2 --connect-timeout 30 -o $dest $url
+    $curlArgs = @('-fL', '--retry', '3', '--retry-delay', '2', '--connect-timeout', '30')
+    if ($useAuth) { $curlArgs += @('-H', "Authorization: Bearer $($Script:CivitaiToken)") }
+    $curlArgs += @('-o', $dest, $url)
+    & curl.exe @curlArgs
     return ($LASTEXITCODE -eq 0)
   }
-  try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing; return $true }
+  try {
+    if ($useAuth) {
+      Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing `
+        -Headers @{ Authorization = "Bearer $($Script:CivitaiToken)" }
+    } else {
+      Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+    }
+    return $true
+  }
   catch { return $false }
 }
 
@@ -310,6 +352,7 @@ function Get-Verified ($row) {
 function Install-Models {
   Step 'Step 3/5 — Downloading models (SDXL + LoRAs)'
   if (-not (Test-Path $Manifest)) { Die "Model manifest not found at $Manifest" }
+  if ($Script:CivitaiToken) { Ok 'Using a Civitai API token for login-gated downloads' }
   foreach ($row in Read-Manifest) { Get-Verified $row }
   if ($Script:Skipped.Count -gt 0) {
     Warn "$($Script:Skipped.Count) model(s) could not be downloaded: $($Script:Skipped -join ', ')"

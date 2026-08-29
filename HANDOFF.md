@@ -1,6 +1,34 @@
 # Handoff
 
 ## Current state
+**Civitai-authenticated model downloads — Slice 1 of the "wide variety of SFW models" effort
+(ADR-0013, PR open for review).** Foundation only: the download path can now authenticate to
+Civitai's gated endpoints, so later slices can add gated checkpoints/LoRAs/video models. **No `src/`
+runtime behavior changed — the token is a download-time secret.**
+
+- **Token, three sources, precedence flag > env > file.** `--civitai-token` /
+  `-CivitaiToken` (Windows) > `CIVITAI_TOKEN` env (installers only) > `install/secrets.env`
+  (gitignored KEY=VALUE file; committed template `install/secrets.env.example`; added to `.gitignore`).
+  The `src/` no-env invariant is preserved — the token lives only in the installer/`scripts/` layer,
+  and the TS helper parses the **file**, never `process.env`.
+- **Bearer header, civitai.com ONLY.** `Authorization: Bearer <token>` is attached only when the URL
+  host is `civitai.com`/subdomain AND a token is set — never for Hugging Face or any other host
+  (look-alikes like `civitai.com.evil` are rejected). Verified by unit tests + a standalone bash
+  harness.
+- **Files:** `scripts/lib/civitai.ts` (pure helpers: `parseCivitaiToken`, `readCivitaiTokenFile`,
+  `resolveCivitaiToken`, `isCivitaiUrl`, `civitaiCurlArgs`) + `test/civitai.test.ts` (9 cases).
+  `install/install-linux.sh` (while-loop arg parse, `resolve_civitai_token`, `fetch` header) and
+  `install/install-windows.ps1` (`-CivitaiToken` param, resolution, `Get-File` header) get parity.
+  `scripts/fetch-wan22-models.ts` is wired to the helper (no-op for its HF URLs). Docs updated
+  (developer-reference, install-ubuntu/windows, models.manifest note).
+- **Tests:** `npm run test:unit` → **98 pass** (89 prior + 9 civitai). `grep -rn process.env src/`
+  empty; no runtime `dependencies`. `bash -n` clean; `--help` verified. (No `pwsh` on this box — the
+  PowerShell twin was written for parity but not executed here.)
+- **Next slices (independent, both build on this one):** Slice 2 = expanded image catalog +
+  `/checkpoints` selection machinery (ADR-0014); Slice 3 = multi-model video dispatch + a second
+  video model, e.g. LTX-Video (ADR-0015). See the approved plan.
+
+### Prior — Wan 2.2 image-to-video foundation (ADR-0008)
 **Wan 2.2 image-to-video foundation (ADR-0008, PR open for review).** Cycle 1 of 2 — proves the
 image-to-video pipeline OUTSIDE the service before Cycle 2 adds a `POST /animate` endpoint. **No
 existing endpoint, SDXL template, or engine path changed.**

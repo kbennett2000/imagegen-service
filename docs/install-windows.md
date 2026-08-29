@@ -82,6 +82,13 @@ Then wait. **This takes a while — often 20–40 minutes**, mostly downloading 
 You can safely **re-run this same command** any time — it skips whatever's already done, so
 re-running never breaks anything (helpful if a download gets interrupted).
 
+> **Optional — a Civitai key for a few extra art styles.** Most models download without any account.
+> A few art styles come from [Civitai](https://civitai.com), which sometimes needs a (free) key. If
+> the installer says it skipped a style, add your key and re-run:
+> `powershell -ExecutionPolicy Bypass -File install\install-windows.ps1 -CivitaiToken YOUR_KEY`
+> (get a key at your Civitai account → API Keys). Everything works without it — those few styles
+> just fall back to a plain look.
+
 > **Setting up auto-start needs Administrator.** Near the end, the installer makes the service
 > start automatically every time you turn on the PC. That step needs an **Administrator** PowerShell
 > window. If you didn't start one, the installer will tell you — just close PowerShell, reopen it as
