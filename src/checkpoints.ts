@@ -33,7 +33,32 @@ export const CHECKPOINTS: Record<string, CheckpointInfo> = {
     file: "zavychromaxl_v100.safetensors",
     description: "Stylized, cinematic fantasy art (ZavyChroma XL).",
   },
-  // All four are full (non-distilled) SDXL checkpoints, compatible with the existing SDXL workflows'
+  // --- Popular SFW SDXL checkpoints from Civitai (ADR-0016). All full (non-distilled) SDXL 1.0. ---
+  dreamshaper: {
+    file: "dreamshaperXL_alpha2Xl10.safetensors",
+    description: "Versatile painterly-to-photoreal all-rounder (DreamShaper XL).",
+  },
+  realcartoon: {
+    file: "realcartoonXL_v7.safetensors",
+    description: "Stylized cartoon-realism blend (RealCartoon-XL v7).",
+  },
+  nightvision: {
+    file: "nightvisionxl_V900.safetensors",
+    description: "Photoreal portraits, natural-language prompts (NightVision XL).",
+  },
+  colorful: {
+    file: "colorfulxl_v70.safetensors",
+    description: "High-saturation, vivid general model (Colorful XL v7).",
+  },
+  samaritan3d: {
+    file: "samaritan3dCartoon_v40SDXL.safetensors",
+    description: "Pixar-style 3D cartoon characters (Samaritan 3D Cartoon v4).",
+  },
+  starlight: {
+    file: "starlightXLAnimated_v3.safetensors",
+    description: "Anime / animated illustration (Starlight XL Animated v3).",
+  },
+  // All are full (non-distilled) SDXL checkpoints, compatible with the existing SDXL workflows'
   // sampler settings (cfg 7, ~25 steps). Turbo/Lightning models are intentionally omitted — they
   // need ~4-8 steps and low cfg, which the current tiers don't provide.
 };
