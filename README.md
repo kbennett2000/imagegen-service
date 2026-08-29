@@ -120,17 +120,19 @@ npm start          # listens on 0.0.0.0:8189, talks to ComfyUI on :8188
 npm run test:unit  # CI-safe; mocks ComfyUI, no GPU needed
 ```
 
-## Experimental: animate an image (Wan 2.2)
+## Experimental: animate an image
 
-Turn a still into a short video with
-[Wan 2.2 TI2V 5B](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged) running through the
-same ComfyUI instance (ADR-[0008](docs/adr/0008-image-to-video-wan22.md)/[0009](docs/adr/0009-animate-endpoint.md)).
-Served by **`POST /animate`** (still image + prompt in → mp4 out); see the
-[developer reference](docs/developer-reference.md#post-animate--videomp4).
+Turn a still into a short video, served by **`POST /animate`** (still image + prompt in → mp4 out),
+through the same ComfyUI instance. Two SFW models are available via the `model` field
+(ADR-[0008](docs/adr/0008-image-to-video-wan22.md)/[0009](docs/adr/0009-animate-endpoint.md)/[0015](docs/adr/0015-multi-model-video-dispatch.md)):
 
-The 5B model fits the 12 GB card with no quantization tricks, but note SDXL and Wan **swap in and out
-of the GPU**, so the first video job after an image job (or vice-versa) pauses to load the model, and
-a render takes minutes.
+- **`wan-5b`** (default) — [Wan 2.2 TI2V 5B](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged), higher-fidelity, ~18 GB of files (`scripts/fetch-wan22-models.ts`).
+- **`ltxv`** — [LTX-Video 2B](https://huggingface.co/Lightricks/LTX-Video), faster and lighter, ~11.5 GB of files (`scripts/fetch-ltxv-models.ts`).
+
+See the [developer reference](docs/developer-reference.md#post-animate--videomp4) for the full field
+list. Both fit the 12 GB card with no quantization tricks, but note SDXL and the video model **swap in
+and out of the GPU**, so the first video job after an image job (or vice-versa) pauses to load the
+model, and a render takes minutes.
 
 **One-time setup** on the ComfyUI box:
 
@@ -138,10 +140,11 @@ a render takes minutes.
 # 1. Update ComfyUI first — the Wan 2.2 nodes require a current build.
 cd ~/comfyui && git pull                     # (however you normally update ComfyUI)
 
-# 2. Fetch the three model files (~18 GB total). Idempotent — re-runs skip completed files.
+# 2. Fetch a model's files. Idempotent — re-runs skip completed files.
 #    Default models root is ~/comfyui/models; override with --models-root <dir>.
 cd ~/Desktop/projects/imagegen-service
-npx tsx scripts/fetch-wan22-models.ts
+npx tsx scripts/fetch-wan22-models.ts   # wan-5b (~18 GB)
+npx tsx scripts/fetch-ltxv-models.ts    # ltxv   (~11.5 GB) — or just one of the two
 #    ...then restart ComfyUI so it re-scans its models directory.
 ```
 

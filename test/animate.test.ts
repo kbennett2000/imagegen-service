@@ -221,3 +221,71 @@ test("GET /health reports wan.ready true when models present, false + missing ot
     await notReady.close();
   }
 });
+
+// ---- model dispatch: LTX-Video (ADR-0015) ------------------------------------------------
+
+test("animateImage: model=ltxv renders the LTX graph instead of Wan", async () => {
+  const mock = new MockComfy({ outputFilename: (pid) => `${pid}.mp4` });
+  const result = await animateImage(
+    URL,
+    { prompt: "a fox trots", image: B64_STILL, seed: 7, model: "ltxv" },
+    mock.fetch,
+  );
+  assert.equal(result.ok, true);
+  const graph = mock.submitted[0]!.graph;
+  // LTX nodes, not Wan nodes.
+  assert.equal(graph["77"].class_type, "LTXVImgToVideo");
+  assert.equal(graph["44"].class_type, "CheckpointLoaderSimple");
+  assert.equal(graph["44"].inputs.ckpt_name, "ltx-video-2b-v0.9.5.safetensors");
+  assert.equal(graph["6"].inputs.text, "a fox trots");
+  assert.equal(graph["72"].inputs.noise_seed, 7);
+  assert.equal(graph["78"].inputs.image, mock.uploads[0]);
+  assert.equal(graph["37"], undefined); // no Wan UNETLoader
+});
+
+test("animateImage: model=ltxv with its files missing -> clean error naming the LTX fetch script", async () => {
+  // Advertise no checkpoints, so the LTX checkpoint preflight fails.
+  const mock = new MockComfy({ checkpoints: [] });
+  const result = await animateImage(URL, { prompt: "p", image: B64_STILL, model: "ltxv" }, mock.fetch);
+  assert.equal(result.ok, false);
+  const r = result as { ok: false; error: string };
+  assert.match(r.error, /not installed/);
+  assert.match(r.error, /ltx-video-2b-v0\.9\.5\.safetensors/);
+  assert.match(r.error, /fetch-ltxv-models/);
+  assert.equal(mock.submitted.length, 0);
+});
+
+test("POST /animate: model=ltxv -> 200 video/mp4", async () => {
+  const mock = new MockComfy({ outputFilename: (pid) => `${pid}.mp4` });
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/animate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "come alive", image: B64_STILL, model: "ltxv" }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "video/mp4");
+    assert.equal(mock.submitted[0]!.graph["77"].class_type, "LTXVImgToVideo");
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /animate: an unknown model -> 422, nothing submitted", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/animate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "x", image: B64_STILL, model: "sora" }),
+    });
+    assert.equal(res.status, 422);
+    const body = (await res.json()) as any;
+    assert.match(body.error, /model/);
+    assert.equal(mock.submitted.length, 0);
+  } finally {
+    await svc.close();
+  }
+});

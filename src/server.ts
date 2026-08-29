@@ -22,6 +22,7 @@ import {
 import { STYLE_LORAS } from "./style-loras.js";
 import { ffmpegAvailable as ffmpegAvailableDefault, stitchVideos as stitchVideosDefault, type StitchResult } from "./stitch.js";
 import { MAX_FRAMES } from "./wan-workflow.js";
+import { ANIMATE_MODELS, isAnimateModel } from "./video-models.js";
 
 // CreateVideo caps fps at 120.
 const MAX_FPS = 120;
@@ -237,6 +238,9 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   ) {
     return { error: `\`fps\` must be a number in [1, ${MAX_FPS}]` };
   }
+  if (b.model !== undefined && !isAnimateModel(b.model)) {
+    return { error: `\`model\` must be one of: ${ANIMATE_MODELS.join(", ")}` };
+  }
 
   const params: AnimateParams = { prompt: b.prompt, image: b.image };
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
@@ -245,6 +249,7 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   if (typeof b.height === "number") params.height = b.height;
   if (typeof b.frames === "number") params.frames = b.frames;
   if (typeof b.fps === "number") params.fps = b.fps;
+  if (isAnimateModel(b.model)) params.model = b.model;
   return { params };
 }
 

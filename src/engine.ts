@@ -9,11 +9,10 @@ import { fileURLToPath } from "node:url";
 
 import { ensureTrigger, lookupStyleLora, type StyleLora } from "./style-loras.js";
 import {
-  renderWanWorkflow,
-  WAN_DIFFUSION_MODEL,
-  WAN_TEXT_ENCODER,
-  WAN_VAE,
-} from "./wan-workflow.js";
+  getVideoModel,
+  type AnimateModel,
+  type VideoModelFile,
+} from "./video-models.js";
 
 // fetch is dependency-injected so tests drive the whole HTTP flow with no GPU / no ComfyUI.
 export type FetchFn = typeof fetch;
@@ -97,6 +96,9 @@ export interface AnimateParams {
   height?: number;
   frames?: number;
   fps?: number;
+  // Which video model to use (ADR-0015). Omitted => the default (wan-5b), so existing callers are
+  // unaffected. The server validates this against ANIMATE_MODELS before it reaches here.
+  model?: AnimateModel;
 }
 
 export type AnimateResult =
@@ -369,20 +371,28 @@ export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[
   return objectInfoOptions(base, fetchFn, "LoraLoader", "lora_name");
 }
 
-// Which of the three Wan 2.2 model files (ADR-0008) are NOT advertised by ComfyUI. [] => all present
-// and animation can run; a non-empty list is exactly what to fetch. Returns all three as missing when
-// ComfyUI is unreachable (each probe returns []).
+// Which of a video model's required files are NOT advertised by ComfyUI (ADR-0015). [] => all present
+// and animation can run; a non-empty list is exactly what to fetch. Each file names the object_info
+// loader + combo to probe; results keep the spec's file order. All files read missing when ComfyUI is
+// unreachable (each probe returns []).
+export async function videoModelsMissing(
+  base: string,
+  fetchFn: FetchFn,
+  files: readonly VideoModelFile[],
+): Promise<string[]> {
+  const checks = await Promise.all(
+    files.map(async (f) => ({
+      f,
+      present: (await objectInfoOptions(base, fetchFn, f.loaderClass, f.inputName)).includes(f.file),
+    })),
+  );
+  return checks.filter((c) => !c.present).map((c) => `${c.f.subdir}/${c.f.file}`);
+}
+
+// The Wan 2.2 preflight, kept as a named export (used by the smoke path and tests). Delegates to the
+// generic check with the wan-5b spec's file list.
 export async function wanModelsMissing(base: string, fetchFn: FetchFn): Promise<string[]> {
-  const [unets, clips, vaes] = await Promise.all([
-    objectInfoOptions(base, fetchFn, "UNETLoader", "unet_name"),
-    objectInfoOptions(base, fetchFn, "CLIPLoader", "clip_name"),
-    objectInfoOptions(base, fetchFn, "VAELoader", "vae_name"),
-  ]);
-  const missing: string[] = [];
-  if (!unets.includes(WAN_DIFFUSION_MODEL)) missing.push(`diffusion_models/${WAN_DIFFUSION_MODEL}`);
-  if (!clips.includes(WAN_TEXT_ENCODER)) missing.push(`text_encoders/${WAN_TEXT_ENCODER}`);
-  if (!vaes.includes(WAN_VAE)) missing.push(`vae/${WAN_VAE}`);
-  return missing;
+  return videoModelsMissing(base, fetchFn, getVideoModel("wan-5b").files);
 }
 
 async function loraAvailable(base: string, fetchFn: FetchFn, loraFile: string): Promise<boolean> {
@@ -713,14 +723,15 @@ export async function animateImage(
   fetchFn: FetchFn = fetch,
 ): Promise<AnimateResult> {
   const base = comfyBase(comfyUrl);
+  const spec = getVideoModel(params.model);
   try {
-    // Preflight: the three Wan files must be installed. Fail cleanly and actionably if not — unlike
+    // Preflight: this model's files must be installed. Fail cleanly and actionably if not — unlike
     // the IP-Adapter path, there is no meaningful render without them.
-    const missing = await wanModelsMissing(base, fetchFn);
+    const missing = await videoModelsMissing(base, fetchFn, spec.files);
     if (missing.length) {
       return {
         ok: false,
-        error: `Wan 2.2 model files not installed on the ComfyUI host: ${missing.join(", ")} — run scripts/fetch-wan22-models.ts, then restart ComfyUI`,
+        error: `${spec.label} model files not installed on the ComfyUI host: ${missing.join(", ")} — run ${spec.fetchHint}, then restart ComfyUI`,
       };
     }
 
@@ -734,7 +745,7 @@ export async function animateImage(
       return { ok: false, error: `input image upload failed: ${reason}` };
     }
 
-    const graph = renderWanWorkflow({
+    const graph = spec.render({
       prompt: params.prompt,
       negativePrompt: params.negativePrompt,
       seed: params.seed,

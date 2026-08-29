@@ -235,9 +235,11 @@ post-process, so it works on any generation (txt2img, img2img, styled, etc.). Se
 
 ### `POST /animate` → `video/mp4`
 
-Turns a **still image into a short video** with Wan 2.2 TI2V 5B, through the same ComfyUI instance
-(ADR-[0008](adr/0008-image-to-video-wan22.md)/[0009](adr/0009-animate-endpoint.md)). JSON in, raw
-**mp4 bytes** out (200/422/503). Gated by the token when auth is enabled.
+Turns a **still image into a short video** through the same ComfyUI instance
+(ADR-[0008](adr/0008-image-to-video-wan22.md)/[0009](adr/0009-animate-endpoint.md)/[0015](adr/0015-multi-model-video-dispatch.md)).
+JSON in, raw **mp4 bytes** out (200/422/503). Gated by the token when auth is enabled. Two models are
+available via the `model` field: **`wan-5b`** (Wan 2.2 TI2V 5B, the default) and **`ltxv`** (LTX-Video
+2B — faster and lighter).
 
 ```bash
 curl -X POST http://localhost:8189/animate \
@@ -254,15 +256,18 @@ curl -X POST http://localhost:8189/animate \
 |---|---|---|
 | `image` | base64 string | **required** — the still to animate. |
 | `prompt` | string | **required** — how it should move. |
-| `negativePrompt` | string | Appended to Wan's baseline negative. |
+| `model` | string | `wan-5b` (default) or `ltxv`. An unknown value is a **422**. |
+| `negativePrompt` | string | Appended to the model's baseline negative. |
 | `seed` | number | Omit for a random seed. |
-| `width` / `height` | integer `[256, 2048]` | Target video resolution. Snapped to Wan's ×32 grid. Default **1280×704**. |
-| `frames` | integer `[1, 121]` | Snapped to Wan's `4k+1` grid. Default/cap **121** (5 s @ 24 fps). |
+| `width` / `height` | integer `[256, 2048]` | Target resolution, snapped to each model's ×32 grid. Default **1280×704** (wan-5b) / **768×512** (ltxv). |
+| `frames` | integer `[1, 121]` | Snapped to the model's grid (wan-5b `4k+1`, ltxv `8n+1`). Default **121** (wan-5b) / **97** (ltxv). |
 | `fps` | number `[1, 120]` | Default **24**. |
 
-- **Requires the three Wan model files** on the ComfyUI host (`scripts/fetch-wan22-models.ts`). If any
-  is missing the request returns **503** naming exactly what to fetch — check `GET /health`'s `wan`
-  block first (`{ "ready": true }` means animation is available).
+- **Requires that model's files** on the ComfyUI host — `wan-5b` needs the three Wan files
+  (`scripts/fetch-wan22-models.ts`); `ltxv` needs the LTX checkpoint + T5 encoder
+  (`scripts/fetch-ltxv-models.ts`). If any is missing the request returns **503** naming exactly what
+  to fetch and which script to run. For `wan-5b`, `GET /health`'s `wan` block (`{ "ready": true }`)
+  reports availability up front.
 - **Renders take minutes**, and the **first** animation after an image job (or vice-versa) also pays a
   one-time **model-load pause** as SDXL and Wan swap on the 12 GB card. Set a generous client read
   timeout; the server's own poll budget is 20 minutes.
