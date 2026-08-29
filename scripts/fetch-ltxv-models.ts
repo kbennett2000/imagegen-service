@@ -3,10 +3,12 @@
 // scripts/fetch-wan22-models.ts and reuses its pure, unit-tested planDownloads.
 //
 // Usage:
-//   npx tsx scripts/fetch-ltxv-models.ts [--models-root <dir>] [--dry-run]
+//   npx tsx scripts/fetch-ltxv-models.ts [--models-root <dir>] [--extra-root <dir>]... [--dry-run]
 //
 // Default models root: ~/comfyui/models. Both files are on UNGATED Hugging Face repos — no token
 // needed. The v0.9.5 checkpoint bundles its VAE, so only two files: the checkpoint + the T5 encoder.
+// --extra-root points at additional ComfyUI models roots (e.g. a second drive; ADR-0017): a full-size
+// copy found under any of them counts as present and is skipped. Downloads still land in --models-root.
 
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
@@ -41,21 +43,26 @@ function safeStat(p: string): { size: number } | undefined {
   }
 }
 
-function parseArgs(argv: string[]): { modelsRoot: string; dryRun: boolean } {
+function parseArgs(argv: string[]): { modelsRoot: string; dryRun: boolean; extraRoots: string[] } {
   let modelsRoot = path.join(os.homedir(), "comfyui", "models");
   let dryRun = false;
+  const extraRoots: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--models-root") {
       const next = argv[++i];
       if (!next) throw new Error("--models-root requires a directory argument");
       modelsRoot = path.resolve(next);
+    } else if (argv[i] === "--extra-root") {
+      const next = argv[++i];
+      if (!next) throw new Error("--extra-root requires a directory argument");
+      extraRoots.push(path.resolve(next));
     } else if (argv[i] === "--dry-run") {
       dryRun = true;
     } else {
       throw new Error(`unknown argument: ${argv[i]}`);
     }
   }
-  return { modelsRoot, dryRun };
+  return { modelsRoot, dryRun, extraRoots };
 }
 
 function humanGB(bytes: number): string {
@@ -63,15 +70,16 @@ function humanGB(bytes: number): string {
 }
 
 function main(): void {
-  const { modelsRoot, dryRun } = parseArgs(process.argv.slice(2));
+  const { modelsRoot, dryRun, extraRoots } = parseArgs(process.argv.slice(2));
   console.log(`ComfyUI models root: ${modelsRoot}`);
-  const plans = planDownloads(LTXV_MODELS, modelsRoot, safeStat);
+  if (extraRoots.length) console.log(`Also searching: ${extraRoots.join(", ")}`);
+  const plans = planDownloads(LTXV_MODELS, modelsRoot, extraRoots, safeStat);
 
   let downloaded = 0;
   let skipped = 0;
   for (const plan of plans) {
     if (plan.action === "skip") {
-      console.log(`  [skip]     ${plan.spec.file} — already present (${humanGB(plan.spec.size)}) at ${plan.dest}`);
+      console.log(`  [skip]     ${plan.spec.file} — already present (${humanGB(plan.spec.size)}) at ${plan.foundAt ?? plan.dest}`);
       skipped++;
       continue;
     }

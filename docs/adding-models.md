@@ -232,3 +232,56 @@ install.
 
 For the raw traceback, the **ComfyUI console/log** always has the full Python stack — but the
 service's own error line is usually enough to tell A from B.
+
+---
+
+## 8. Splitting model storage across drives (a second disk)
+
+When the main drive fills up, you can keep models on a second drive **as well as** the default
+location — both show up in the Model dropdown, seamlessly. This works because the service never scans
+disk: the list is whatever **ComfyUI** reports (`/object_info` → `/health`). So you only configure
+ComfyUI; the service needs no change. (ADR-0017.)
+
+**1. Make a models tree on the second drive** (mirror the layout from §1):
+
+```bash
+mkdir -p "/run/media/kb/2TB 02/comfyui-models/"{checkpoints,loras,vae,diffusion_models,text_encoders,upscale_models,clip_vision}
+```
+
+**2. Tell ComfyUI to also scan it.** Copy the template
+[`install/extra_model_paths.example.yaml`](../install/extra_model_paths.example.yaml) to your ComfyUI
+install root as `extra_model_paths.yaml`, set `base_path` to the dir above, and **restart ComfyUI**:
+
+```yaml
+second_drive:
+    base_path: /run/media/kb/2TB 02/comfyui-models/
+    checkpoints: checkpoints/
+    loras: loras/
+    vae: vae/
+    diffusion_models: diffusion_models/
+    text_encoders: text_encoders/
+    upscale_models: upscale_models/
+    clip_vision: clip_vision/
+```
+
+A checkpoint at `.../comfyui-models/checkpoints/foo.safetensors` now appears as `foo.safetensors`
+(nested: `.../checkpoints/sdxl/foo.safetensors` → `sdxl/foo.safetensors`). Verify per §6.
+
+**3. Downloads still land on the main drive.** Move files over manually as space runs low. So the
+fetch scripts don't re-download what you've moved, point them at the second drive too — they'll treat
+a full-size copy found there as already installed:
+
+```bash
+# checkpoints — flag is repeatable; env is colon-separated
+scripts/fetch-missing-checkpoints.sh --extra-root "/run/media/kb/2TB 02/comfyui-models"
+export COMFYUI_EXTRA_MODEL_ROOTS="/run/media/kb/2TB 02/comfyui-models"   # same effect, set once
+
+# video models (WAN / LTXV) — flag only
+npx tsx scripts/fetch-wan22-models.ts --extra-root "/run/media/kb/2TB 02/comfyui-models"
+```
+
+**Removable-drive caveat.** `/run/media/<user>/<label>` only exists while the drive is mounted — if
+it's unmounted, those models drop out of the dropdown and the scripts stop seeing them (and may
+re-download). For a permanent setup, give the drive a stable mountpoint in `/etc/fstab` and use that
+path everywhere instead. Also prefer a real Linux filesystem (ext4/xfs/btrfs) over exFAT/NTFS for the
+model drive.

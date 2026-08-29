@@ -23,6 +23,16 @@ test("LTXV_MODELS: the two pinned files land in the correct ComfyUI subdirs, ung
 test("planDownloads (reused): LTX files present at exact size are skipped, else downloaded", () => {
   const sizes: Record<string, number> = {};
   for (const m of LTXV_MODELS) sizes[destOf(m)] = m.size;
-  for (const p of planDownloads(LTXV_MODELS, ROOT, fakeStat(sizes))) assert.equal(p.action, "skip");
-  for (const p of planDownloads(LTXV_MODELS, ROOT, fakeStat({}))) assert.equal(p.action, "download");
+  for (const p of planDownloads(LTXV_MODELS, ROOT, [], fakeStat(sizes))) assert.equal(p.action, "skip");
+  for (const p of planDownloads(LTXV_MODELS, ROOT, [], fakeStat({}))) assert.equal(p.action, "download");
+});
+
+test("planDownloads (reused): an LTX file under an extra root (second drive) is skipped", () => {
+  const EXTRA = "/mnt/drive2/comfyui-models";
+  const first = LTXV_MODELS[0]!;
+  const extraPath = path.join(EXTRA, first.subdir, first.file);
+  const plans = planDownloads(LTXV_MODELS, ROOT, [EXTRA], fakeStat({ [extraPath]: first.size }));
+  const plan = plans.find((p) => p.spec.file === first.file)!;
+  assert.equal(plan.action, "skip");
+  assert.equal(plan.foundAt, extraPath);
 });
