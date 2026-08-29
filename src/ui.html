@@ -189,7 +189,7 @@
 
   <hr style="margin:2.5rem 0 1.25rem; border:none; border-top:1px solid #d1d5db" />
 
-  <h1>Animate a picture <span class="devtag" style="background:#7c3aed">Wan 2.2 · beta</span></h1>
+  <h1>Animate a picture <span class="devtag" style="background:#7c3aed">video · beta</span></h1>
   <p class="sub">Turn a still into a short video via <code>POST /animate</code>. Renders take
     <strong>minutes</strong>, and the first one after an image job pauses to swap models on the GPU.</p>
 
@@ -205,6 +205,12 @@
           <button type="button" id="animImageClear" class="linkbtn">remove picture</button>
         </div>
       </div>
+
+      <label for="animModel">Model</label>
+      <select id="animModel">
+        <option value="wan-5b" selected>Wan 2.2 5B — richer, slower (1280×704 @ 24fps)</option>
+        <option value="ltxv">LTX-Video 2B — faster, lighter (768×512 @ 24fps)</option>
+      </select>
 
       <label for="animPrompt">Prompt <span class="hint">(required — how it should move)</span></label>
       <textarea id="animPrompt" placeholder="the scene comes to life, gentle camera push-in"></textarea>
@@ -430,25 +436,50 @@
       $("upscaleModelBox").hidden = models.length < 2; // only show the picker when there's a choice
     }
 
-    // Fill the Model dropdown from the live installed-checkpoint list, selecting the effective
-    // default. Whatever ComfyUI has installed shows up here — nothing is hardcoded.
-    function populateCheckpoints(h) {
+    // Fill the Model dropdown: the live installed-checkpoint files (selectable), plus the curated
+    // catalog by friendly name (from /checkpoints) — including ones not yet downloaded, shown
+    // disabled with "not installed" so the whole catalog is visible. Selecting a friendly name sends
+    // it as `checkpoint`; the server resolves it to the file.
+    async function populateCheckpoints(h) {
       defaultCheckpoint = h.checkpoint || "";
-      const list = Array.isArray(h.checkpoints) ? h.checkpoints : [];
+      const installed = Array.isArray(h.checkpoints) ? h.checkpoints : [];
       checkpointSel.innerHTML = "";
-      if (!list.length) {
+
+      if (installed.length) {
+        const g = document.createElement("optgroup");
+        g.label = "Installed";
+        for (const name of installed) {
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name + (name === defaultCheckpoint ? "  (default)" : "");
+          if (name === defaultCheckpoint) opt.selected = true;
+          g.appendChild(opt);
+        }
+        checkpointSel.appendChild(g);
+      } else {
         const opt = document.createElement("option");
         opt.value = ""; opt.textContent = "(service default)";
         checkpointSel.appendChild(opt);
-        return;
       }
-      for (const name of list) {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name + (name === defaultCheckpoint ? "  (default)" : "");
-        if (name === defaultCheckpoint) opt.selected = true;
-        checkpointSel.appendChild(opt);
-      }
+
+      // Catalog (by friendly name), including not-yet-downloaded entries.
+      try {
+        const res = await fetch("/checkpoints", { headers: authHeaders() });
+        if (!res.ok) return;
+        const cat = (await res.json()).checkpoints || [];
+        if (!cat.length) return;
+        const g = document.createElement("optgroup");
+        g.label = "Catalog (by name)";
+        for (const c of cat) {
+          const opt = document.createElement("option");
+          opt.value = c.name;
+          opt.textContent = c.installed ? c.name : (c.name + " — not installed");
+          opt.disabled = !c.installed;
+          if (c.description) opt.title = c.description;
+          g.appendChild(opt);
+        }
+        checkpointSel.appendChild(g);
+      } catch { /* leave the installed list as-is */ }
     }
 
     // Populate the style dropdown. On 401 (auth on, no/invalid token) show a hint instead of breaking.
@@ -664,6 +695,8 @@
       if (!prompt) { showAnimError("Prompt is required."); return; }
 
       const body = { image: animImageB64, prompt: prompt };
+      const model = $("animModel").value;
+      if (model && model !== "wan-5b") body.model = model;
       const neg = $("animNegative").value.trim();
       if (neg) body.negativePrompt = neg;
       const framesRaw = $("animFrames").value.trim();
