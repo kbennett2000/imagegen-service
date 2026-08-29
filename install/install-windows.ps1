@@ -1,12 +1,12 @@
-<#
-  install-windows.ps1 — full-stack auto-installer for imagegen-service on Windows.
+﻿<#
+  install-windows.ps1 - full-stack auto-installer for imagegen-service on Windows.
 
   Takes a machine with a WORKING NVIDIA driver from nothing to a running service:
     ComfyUI (isolated uv Python 3.11 venv, torch cu128) + ComfyUI-Manager, SDXL base/refiner/VAE,
     the 12 style LoRAs, this repo's Node deps, config.json, and BOTH auto-start NSSM services.
 
   GUIDING PRINCIPLE: automate everything EXCEPT the NVIDIA driver. We DETECT the driver/CUDA and,
-  if it is missing or too old, STOP with a plain-language message + the official link — we never
+  if it is missing or too old, STOP with a plain-language message + the official link - we never
   install or change the driver (that can break your display).
 
   Idempotent: safe to re-run. Every step checks what is already there and skips it.
@@ -19,7 +19,7 @@
   A Civitai API key (only needed for login-gated model downloads) may be passed with -CivitaiToken,
   or set via a CIVITAI_TOKEN environment variable, or an install\secrets.env file (see
   install\secrets.env.example). Precedence: -CivitaiToken > CIVITAI_TOKEN env > secrets.env file.
-  It is used ONLY for civitai.com downloads — never sent to Hugging Face or any other host.
+  It is used ONLY for civitai.com downloads - never sent to Hugging Face or any other host.
 #>
 [CmdletBinding()]
 param(
@@ -98,7 +98,7 @@ function Test-Admin {
 # 1. PREFLIGHT / DRIVER GATE
 # ================================================================================================
 function Invoke-Preflight {
-  Step 'Step 1/5 — Checking your system'
+  Step 'Step 1/5 - Checking your system'
 
   if (-not $IsWindows -and $PSVersionTable.Platform -ne 'Win32NT' -and $env:OS -ne 'Windows_NT') {
     Die 'This installer is for Windows. On Linux use install/install-linux.sh instead.'
@@ -125,7 +125,7 @@ function Invoke-Preflight {
   $driverVer = $parts[2]
 
   $banner  = (& nvidia-smi 2>$null | Out-String)
-  $cudaCap = if ($banner -match 'CUDA Version:\s*([0-9]+\.[0-9]+)') { $Matches[1] } else { $null }
+  $cudaCap = if ($banner -match 'CUDA (?:UMD )?Version:\s*([0-9]+\.[0-9]+)') { $Matches[1] } else { $null }
   if (-not $cudaCap) {
     Die 'Could not read the CUDA version from your NVIDIA driver.' `
         "Reinstall/upgrade the official driver ($DriverLink), reboot, and re-run."
@@ -217,14 +217,14 @@ function Ensure-Uv {
   if (Get-Command uv -ErrorAction SilentlyContinue) { return }
   $uvLocal = Join-Path $env:USERPROFILE '.local\bin'
   if (Test-Path (Join-Path $uvLocal 'uv.exe')) { $env:Path = "$uvLocal;$env:Path"; return }
-  Say '  Installing uv (fast Python env manager)…'
+  Say '  Installing uv (fast Python env manager)...'
   powershell -ExecutionPolicy Bypass -Command 'irm https://astral.sh/uv/install.ps1 | iex' | Out-Null
   $env:Path = "$uvLocal;$env:Path"
   if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { Die 'uv installed but not on PATH.' }
 }
 
 function Install-ComfyUI {
-  Step 'Step 2/5 — Installing ComfyUI'
+  Step 'Step 2/5 - Installing ComfyUI'
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Die 'Git is required but was not found.' 'Install Git for Windows (https://git-scm.com/download/win), then re-run.'
   }
@@ -233,7 +233,7 @@ function Install-ComfyUI {
   if (Test-Path (Join-Path $ComfyDir 'main.py')) {
     Skip "ComfyUI already checked out at $ComfyDir"
   } else {
-    Say "  Downloading ComfyUI to $ComfyDir …"
+    Say "  Downloading ComfyUI to $ComfyDir ..."
     git clone --depth 1 $ComfyRepo $ComfyDir
     if ($LASTEXITCODE -ne 0) { Die 'Failed to clone ComfyUI.' }
     Ok 'ComfyUI downloaded'
@@ -243,7 +243,7 @@ function Install-ComfyUI {
   if (Test-Path $py) {
     Skip 'Python venv already exists'
   } else {
-    Say "  Creating an isolated Python $PyVersion environment …"
+    Say "  Creating an isolated Python $PyVersion environment ..."
     uv venv --python $PyVersion (Join-Path $ComfyDir '.venv')
     if ($LASTEXITCODE -ne 0) { Die 'Failed to create the Python venv.' }
     Ok "Python $PyVersion environment ready"
@@ -252,7 +252,7 @@ function Install-ComfyUI {
   if (Test-ComfyTorch) {
     Skip 'PyTorch with CUDA already working'
   } else {
-    Say '  Installing PyTorch (CUDA 12.8 build) — this is a large download …'
+    Say '  Installing PyTorch (CUDA 12.8 build) - this is a large download ...'
     uv pip install --python $py torch torchvision --index-url $TorchIndex
     if ($LASTEXITCODE -ne 0) { Die 'Failed to install PyTorch (cu128).' }
     if (-not (Test-ComfyTorch)) { Die 'PyTorch installed but CUDA is not available to it.' 'Confirm the NVIDIA driver is loaded (nvidia-smi) and re-run.' }
@@ -263,7 +263,7 @@ function Install-ComfyUI {
   if (Test-Path $depsSentinel) {
     Skip 'ComfyUI dependencies already installed'
   } else {
-    Say '  Installing ComfyUI dependencies …'
+    Say '  Installing ComfyUI dependencies ...'
     uv pip install --python $py -r (Join-Path $ComfyDir 'requirements.txt') | Out-Null
     if ($LASTEXITCODE -ne 0) { Die 'Failed to install ComfyUI requirements.' }
     New-Item -ItemType File -Path $depsSentinel -Force | Out-Null
@@ -274,7 +274,7 @@ function Install-ComfyUI {
   if (Test-Path $mgr) {
     Skip 'ComfyUI-Manager already installed'
   } else {
-    Say '  Installing ComfyUI-Manager …'
+    Say '  Installing ComfyUI-Manager ...'
     git clone --depth 1 $ManagerRepo $mgr
     if ($LASTEXITCODE -eq 0) {
       $mgrReq = Join-Path $mgr 'requirements.txt'
@@ -306,7 +306,7 @@ function Test-Safetensors ($path, $minMB) {
 }
 
 function Get-File ($url, $dest) {
-  # Attach the Civitai Bearer token ONLY for civitai.com (and subdomains) — never for any other host.
+  # Attach the Civitai Bearer token ONLY for civitai.com (and subdomains) - never for any other host.
   $useAuth = $Script:CivitaiToken -and `
     ($url -match '^https?://civitai\.com/' -or $url -match '^https?://[^/]+\.civitai\.com/')
   if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
@@ -337,7 +337,7 @@ function Get-Verified ($row) {
   $tmp = "$dest.part"
   foreach ($url in @($row.Primary, $row.Fallback)) {
     if (-not $url -or $url -eq '-') { continue }
-    Say "  Downloading $($row.File) …"
+    Say "  Downloading $($row.File) ..."
     Remove-Item $tmp -ErrorAction SilentlyContinue
     if ((Get-File $url $tmp) -and (Test-Safetensors $tmp $row.MinMB)) {
       Move-Item -Force $tmp $dest; Ok $row.File; return
@@ -345,12 +345,12 @@ function Get-Verified ($row) {
     Warn "Source failed or was not a valid model file; trying the next source for $($row.File)"
   }
   Remove-Item $tmp -ErrorAction SilentlyContinue
-  Warn "Could not fetch $($row.File) from any source — the matching style will fall back to prompt-only."
+  Warn "Could not fetch $($row.File) from any source - the matching style will fall back to prompt-only."
   $Script:Skipped += $row.File
 }
 
 function Install-Models {
-  Step 'Step 3/5 — Downloading models (SDXL + LoRAs)'
+  Step 'Step 3/5 - Downloading models (SDXL + LoRAs)'
   if (-not (Test-Path $Manifest)) { Die "Model manifest not found at $Manifest" }
   if ($Script:CivitaiToken) { Ok 'Using a Civitai API token for login-gated downloads' }
   foreach ($row in Read-Manifest) { Get-Verified $row }
@@ -365,7 +365,7 @@ function Install-Models {
 function Ensure-Node {
   if (Get-Command node -ErrorAction SilentlyContinue) { return }
   if (Get-Command winget -ErrorAction SilentlyContinue) {
-    Say '  Node.js not found — installing the LTS via winget …'
+    Say '  Node.js not found - installing the LTS via winget ...'
     winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements | Out-Null
     $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
                 [Environment]::GetEnvironmentVariable('Path','User')
@@ -379,7 +379,7 @@ function Ensure-Node {
 function Ensure-Nssm {
   $nssmExe = Join-Path $NssmDir 'nssm.exe'
   if (Test-Path $nssmExe) { return $nssmExe }
-  Say '  Downloading NSSM (service manager) …'
+  Say '  Downloading NSSM (service manager) ...'
   New-Item -ItemType Directory -Path $NssmDir -Force | Out-Null
   $zip = Join-Path $NssmDir 'nssm.zip'
   if (-not (Get-File $NssmUrl $zip)) { Die 'Failed to download NSSM.' 'Check your internet connection and re-run.' }
@@ -394,7 +394,7 @@ function Ensure-Nssm {
 }
 
 function Install-Service {
-  Step 'Step 4/5 — Setting up the imagegen-service'
+  Step 'Step 4/5 - Setting up the imagegen-service'
   Ensure-Node
   $nodeExe = (Get-Command node).Source
   $nodeDir = Split-Path -Parent $nodeExe
@@ -403,7 +403,7 @@ function Install-Service {
   if (Test-Path (Join-Path $RepoDir 'node_modules')) {
     Skip 'Service dependencies already installed'
   } else {
-    Say '  Installing service dependencies …'
+    Say '  Installing service dependencies ...'
     Push-Location $RepoDir
     try { npm install | Out-Null; if ($LASTEXITCODE -ne 0) { Die 'npm install failed.' } }
     finally { Pop-Location }
@@ -437,7 +437,7 @@ function Install-NssmServices ($nodeExe, $nodeDir) {
   $py   = Test-ComfyPython
 
   if (-not $haveComfy) {
-    Say '  Registering the ComfyUI service …'
+    Say '  Registering the ComfyUI service ...'
     # AppDirectory is ComfyDir, so main.py is relative. Args go via AppParameters (robust across nssm versions).
     & $nssm install ComfyUI $py | Out-Null
     & $nssm set ComfyUI AppDirectory $ComfyDir | Out-Null
@@ -448,7 +448,7 @@ function Install-NssmServices ($nodeExe, $nodeDir) {
   }
 
   if (-not $haveSvc) {
-    Say '  Registering the imagegen-service …'
+    Say '  Registering the imagegen-service ...'
     # Invoke node by its ABSOLUTE path (the Windows analogue of the systemd nvm-PATH fix): a bare
     # `npm`/`node` may not be on the SYSTEM service PATH. AppParameters mirror `tsx src/index.ts`.
     & $nssm install imagegen-service $nodeExe | Out-Null
@@ -474,7 +474,7 @@ function Test-HttpOk ($url) {
   catch { return $false }
 }
 function Wait-For ($url, $label, $timeoutSec = 180) {
-  Say "  Waiting for $label …"
+  Say "  Waiting for $label ..."
   $waited = 0
   while ($waited -lt $timeoutSec) {
     if (Test-HttpOk $url) { Ok "$label is up"; return $true }
@@ -484,12 +484,12 @@ function Wait-For ($url, $label, $timeoutSec = 180) {
 }
 
 function Invoke-Postflight {
-  Step 'Step 5/5 — Starting everything and checking health'
+  Step 'Step 5/5 - Starting everything and checking health'
   Start-Service ComfyUI -ErrorAction SilentlyContinue
   Start-Service imagegen-service -ErrorAction SilentlyContinue
 
   if (-not (Wait-For "http://localhost:$ComfyPort/system_stats" "ComfyUI (port $ComfyPort)" 240)) {
-    Warn "ComfyUI did not answer on port $ComfyPort yet — it may still be starting."
+    Warn "ComfyUI did not answer on port $ComfyPort yet - it may still be starting."
   }
   if (-not (Wait-For "http://localhost:$ServicePort/health" "imagegen-service (port $ServicePort)" 120)) {
     Say ''
@@ -509,7 +509,7 @@ function Invoke-Postflight {
   if (-not $ip) { $ip = '<this-machine-ip>' }
 
   Write-Host "`n========================================================" -ForegroundColor Green
-  Write-Host '  SUCCESS — imagegen-service is running.' -ForegroundColor Green
+  Write-Host '  SUCCESS - imagegen-service is running.' -ForegroundColor Green
   Write-Host "========================================================" -ForegroundColor Green
   Say ''
   Say "  Test it now:      open  http://localhost:$ServicePort  in a browser"
@@ -532,7 +532,7 @@ function Invoke-Postflight {
 Write-Host 'imagegen-service installer (Windows)'
 Invoke-Preflight
 if ($Check) {
-  Step 'Check mode — no changes were made'
+  Step 'Check mode - no changes were made'
   Say '  Preflight complete. Re-run without -Check to install.'
   exit 0
 }

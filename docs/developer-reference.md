@@ -258,6 +258,71 @@ post-process, so it works on any generation (txt2img, img2img, styled, etc.). Se
   request returns **503** (it does not silently skip) — put one there (e.g. `RealESRGAN_x4plus.pth`).
 - This is pure super-resolution (sharpen + enlarge). It does not re-imagine detail.
 
+### `POST /animate` → `video/mp4`
+
+Turns a **still image into a short video** through the same ComfyUI instance
+(ADR-[0008](adr/0008-image-to-video-wan22.md)/[0009](adr/0009-animate-endpoint.md)/[0015](adr/0015-multi-model-video-dispatch.md)).
+JSON in, raw **mp4 bytes** out (200/422/503). Gated by the token when auth is enabled. Two models are
+available via the `model` field: **`wan-5b`** (Wan 2.2 TI2V 5B, the default) and **`ltxv`** (LTX-Video
+2B — faster and lighter).
+
+```bash
+curl -X POST http://localhost:8189/animate \
+  -H 'content-type: application/json' \
+  -d '{
+        "image": "'"$(base64 -w0 still.png)"'",
+        "prompt": "the scene comes to life, gentle camera push-in",
+        "frames": 121,
+        "fps": 24
+      }' --output animated.mp4
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `image` | base64 string | **required** — the still to animate. |
+| `prompt` | string | **required** — how it should move. |
+| `model` | string | `wan-5b` (default) or `ltxv`. An unknown value is a **422**. |
+| `negativePrompt` | string | Appended to the model's baseline negative. |
+| `seed` | number | Omit for a random seed. |
+| `width` / `height` | integer `[256, 2048]` | Target resolution, snapped to each model's ×32 grid. Default **1280×704** (wan-5b) / **768×512** (ltxv). |
+| `frames` | integer `[1, 121]` | Snapped to the model's grid (wan-5b `4k+1`, ltxv `8n+1`). Default **121** (wan-5b) / **97** (ltxv). |
+| `fps` | number `[1, 120]` | Default **24**. |
+
+- **Requires that model's files** on the ComfyUI host — `wan-5b` needs the three Wan files
+  (`scripts/fetch-wan22-models.ts`); `ltxv` needs the LTX checkpoint + T5 encoder
+  (`scripts/fetch-ltxv-models.ts`). If any is missing the request returns **503** naming exactly what
+  to fetch and which script to run. For `wan-5b`, `GET /health`'s `wan` block (`{ "ready": true }`)
+  reports availability up front.
+- **Renders take minutes**, and the **first** animation after an image job (or vice-versa) also pays a
+  one-time **model-load pause** as SDXL and Wan swap on the 12 GB card. Set a generous client read
+  timeout; the server's own poll budget is 20 minutes.
+- No LoRA/style/upscale/refiner interplay — this is a separate, video-only path. `/generate` is
+  unchanged.
+
+### `POST /stitch` → `video/mp4`
+
+Joins several clips into one video (ADR-[0010](adr/0010-video-stitching.md)). JSON in, combined **mp4
+bytes** out. Auth-gated. Since clips from `/animate` are all H.264 at the same resolution/fps, this is
+a lossless `ffmpeg` stream copy (`-c copy`) — near-instant, no re-encode.
+
+```bash
+curl -X POST http://localhost:8189/stitch \
+  -H 'content-type: application/json' \
+  -d '{"clips":["'"$(base64 -w0 clip1.mp4)"'","'"$(base64 -w0 clip2.mp4)"'"]}' \
+  --output sequence.mp4
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `clips` | string[] | **required** — 2–50 base64 mp4 clips, in play order. |
+
+- The service is stateless (it never saves what it renders), so the **client uploads the clips back**.
+  This route allows a larger request body (256 MB) than the image routes; over that → **413**.
+- **Requires `ffmpeg`** on the host (present alongside ComfyUI). Absent → **503**; check `GET /health`'s
+  `stitch.available` first.
+- Clips should share **resolution and fps** (the `/animate` defaults guarantee this). Mixed sizes make
+  `ffmpeg` fail → a clear **503**, never a silently broken file.
+
 ### `GET /styles`
 
 Lists the preset styles that have a LoRA recipe. Styles not listed are still accepted by
@@ -320,7 +385,9 @@ curl http://localhost:8189/health
   "checkpoint": "sd_xl_base_1.0.safetensors",
   "checkpoints": ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors", "..."],
   "upscaleModel": "RealESRGAN_x4plus.pth",
-  "upscaleModels": ["RealESRGAN_x4plus.pth", "..."] }
+  "upscaleModels": ["RealESRGAN_x4plus.pth", "..."],
+  "wan": { "ready": true, "missing": [] },
+  "stitch": { "available": true } }
 ```
 
 - `lorasLoaded` — which recipe LoRAs are actually present on the ComfyUI host.
@@ -330,6 +397,10 @@ curl http://localhost:8189/health
   built-in test UI does exactly this).
 - `upscaleModel` / `upscaleModels` — the effective default upscale model (config override, else the
   first installed) and the full installed list (empty if none — upscaling is then unavailable).
+- `wan` — image-to-video readiness: `{ "ready": <all three Wan files present>, "missing": [...] }`.
+  `POST /animate` works only when `ready` is `true`; `missing` names what `scripts/fetch-wan22-models.ts`
+  should fetch.
+- `stitch` — `{ "available": <ffmpeg present on the host> }`. `POST /stitch` works only when `true`.
 
 ## Quality tiers
 

@@ -24,6 +24,12 @@ export interface MockOptions {
   // Upscale models ComfyUI claims it can load (drives /health upscaleModels + the upscale path).
   // Default: [] (none installed) so the "no upscale model" error path is the default.
   upscaleModels?: string[];
+  // Wan 2.2 model files ComfyUI claims it can load, keyed by the loader that advertises each (drives
+  // wanModelsMissing / the /animate path + /health `wan`). Default: all three present. Set any to []
+  // to simulate a missing file and exercise the /animate 503 path.
+  wanUnets?: string[];
+  wanClips?: string[];
+  wanVaes?: string[];
   // Simulate ComfyUI being down: every request rejects (network error).
   down?: boolean;
   // Make POST /prompt fail with this HTTP status (e.g. 400/500). Default: succeeds.
@@ -35,6 +41,10 @@ export interface MockOptions {
   readyAfterPolls?: (submissionIndex: number) => number;
   // Report an execution error for a prompt instead of an image.
   historyError?: (submissionIndex: number) => boolean;
+  // Override the produced output filename (default `<prompt_id>.png`). Set e.g. to a .mp4 name to
+  // exercise the /animate video path and its content-type derivation. The extension is stripped by
+  // /view to recover the prompt_id for bytesFor.
+  outputFilename?: (promptId: string) => string;
 }
 
 export interface SubmittedPrompt {
@@ -71,7 +81,19 @@ const DEFAULT_LORAS = [
 
 const DEFAULT_IPADAPTERS = ["ip-adapter-plus-face_sdxl_vit-h.safetensors"];
 
-const DEFAULT_CHECKPOINTS = ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"];
+const DEFAULT_CHECKPOINTS = [
+  "sd_xl_base_1.0.safetensors",
+  "sd_xl_refiner_1.0.safetensors",
+  "ltx-video-2b-v0.9.5.safetensors", // LTX-Video checkpoint (drives the ltxv preflight)
+];
+
+// The three Wan 2.2 files a stock image-to-video install has (ADR-0008/0009).
+const DEFAULT_WAN_UNETS = ["wan2.2_ti2v_5B_fp16.safetensors"];
+const DEFAULT_WAN_CLIPS = [
+  "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+  "t5xxl_fp8_e4m3fn_scaled.safetensors", // LTX-Video T5 text encoder (drives the ltxv preflight)
+];
+const DEFAULT_WAN_VAES = ["wan2.2_vae.safetensors", "sdxl_vae.safetensors"];
 
 // Optional node classes a stock ComfyUI + IPAdapter_plus install provides.
 const DEFAULT_NODES = ["PrepImageForClipVision"];
@@ -139,6 +161,30 @@ export class MockComfy {
         });
       }
 
+      // GET /object_info/UNETLoader — advertises the Wan diffusion models (unet_name).
+      if (method === "GET" && path.startsWith("/object_info/UNETLoader")) {
+        const unets = this.opts.wanUnets ?? DEFAULT_WAN_UNETS;
+        return this.jsonResponse(200, {
+          UNETLoader: { input: { required: { unet_name: [unets] } } },
+        });
+      }
+
+      // GET /object_info/CLIPLoader — advertises the Wan text encoders (clip_name).
+      if (method === "GET" && path.startsWith("/object_info/CLIPLoader")) {
+        const clips = this.opts.wanClips ?? DEFAULT_WAN_CLIPS;
+        return this.jsonResponse(200, {
+          CLIPLoader: { input: { required: { clip_name: [clips] } } },
+        });
+      }
+
+      // GET /object_info/VAELoader — advertises the installed VAEs (vae_name), incl. the Wan VAE.
+      if (method === "GET" && path.startsWith("/object_info/VAELoader")) {
+        const vaes = this.opts.wanVaes ?? DEFAULT_WAN_VAES;
+        return this.jsonResponse(200, {
+          VAELoader: { input: { required: { vae_name: [vaes] } } },
+        });
+      }
+
       // GET /object_info/IPAdapterModelLoader — advertises the installed IP-Adapter model files.
       if (method === "GET" && path.startsWith("/object_info/IPAdapterModelLoader")) {
         const files = this.opts.ipadapters ?? DEFAULT_IPADAPTERS;
@@ -203,26 +249,27 @@ export class MockComfy {
           // Not ready yet — empty entry so the poll loop keeps waiting.
           return this.jsonResponse(200, {});
         }
+        const filename = this.opts.outputFilename?.(promptId) ?? `${promptId}.png`;
         return this.jsonResponse(200, {
           [promptId]: {
             status: { status_str: "success" },
             outputs: {
               "9": {
-                images: [{ filename: `${promptId}.png`, subfolder: "", type: "output" }],
+                images: [{ filename, subfolder: "", type: "output" }],
               },
             },
           },
         });
       }
 
-      // GET /view?filename=<pid>.png
+      // GET /view?filename=<pid>.<ext> — strip any extension to recover the prompt_id.
       if (method === "GET" && path.startsWith("/view")) {
         const q = new URLSearchParams(url.split("?")[1] ?? "");
         const filename = q.get("filename") ?? "";
-        const promptId = filename.replace(/\.png$/, "");
+        const promptId = filename.replace(/\.[^.]+$/, "");
         return new Response(this.bytesFor(promptId), {
           status: 200,
-          headers: { "content-type": "image/png" },
+          headers: { "content-type": "application/octet-stream" },
         });
       }
 

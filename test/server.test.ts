@@ -374,7 +374,7 @@ test("POST /generate -> 422 on a non-multiple-of-8 dimension", async () => {
 test("POST /generate -> config default checkpoint applied when the request omits one", async () => {
   const mock = new MockComfy();
   const config: Config = {
-    comfyui: { url: "http://localhost:8188", checkpoint: "juggernautXL_ragnarok.safetensors" },
+    comfyui: { url: "http://localhost:8188", checkpoint: "sd_xl_refiner_1.0.safetensors" },
     server: { host: "127.0.0.1", port: 0 },
     auth: { enabled: false, token: "" },
   };
@@ -386,7 +386,7 @@ test("POST /generate -> config default checkpoint applied when the request omits
       body: JSON.stringify({ prompt: "x" }),
     });
     assert.equal(res.status, 200);
-    assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, "juggernautXL_ragnarok.safetensors");
+    assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, "sd_xl_refiner_1.0.safetensors");
   } finally {
     await svc.close();
   }
@@ -433,10 +433,10 @@ test("POST /generate -> 422 on a checkpoint with path traversal", async () => {
 
 test("GET /health -> reports the effective checkpoint and installed checkpoint list", async () => {
   const mock = new MockComfy({
-    checkpoints: ["sd_xl_base_1.0.safetensors", "juggernautXL_ragnarok.safetensors"],
+    checkpoints: ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"],
   });
   const config: Config = {
-    comfyui: { url: "http://localhost:8188", checkpoint: "juggernautXL_ragnarok.safetensors" },
+    comfyui: { url: "http://localhost:8188", checkpoint: "sd_xl_refiner_1.0.safetensors" },
     server: { host: "127.0.0.1", port: 0 },
     auth: { enabled: false, token: "" },
   };
@@ -444,10 +444,10 @@ test("GET /health -> reports the effective checkpoint and installed checkpoint l
   try {
     const res = await fetch(`${svc.base}/health`);
     const body = (await res.json()) as any;
-    assert.equal(body.checkpoint, "juggernautXL_ragnarok.safetensors"); // config override is effective
+    assert.equal(body.checkpoint, "sd_xl_refiner_1.0.safetensors"); // config override is effective
     assert.deepEqual(
       body.checkpoints.sort(),
-      ["juggernautXL_ragnarok.safetensors", "sd_xl_base_1.0.safetensors"],
+      ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"],
     );
   } finally {
     await svc.close();
