@@ -71,11 +71,18 @@ const DEFAULT_LORAS = [
 
 const DEFAULT_IPADAPTERS = ["ip-adapter-plus-face_sdxl_vit-h.safetensors"];
 
-const DEFAULT_CHECKPOINTS = ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"];
+const DEFAULT_CHECKPOINTS = [
+  "sd_xl_base_1.0.safetensors",
+  "sd_xl_refiner_1.0.safetensors",
+  "ltx-video-2b-v0.9.5.safetensors", // LTX-Video checkpoint (drives the ltxv preflight)
+];
 
 // The three Wan 2.2 files a stock image-to-video install has (ADR-0008/0009).
 const DEFAULT_WAN_UNETS = ["wan2.2_ti2v_5B_fp16.safetensors"];
-const DEFAULT_WAN_CLIPS = ["umt5_xxl_fp8_e4m3fn_scaled.safetensors"];
+const DEFAULT_WAN_CLIPS = [
+  "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+  "t5xxl_fp8_e4m3fn_scaled.safetensors", // LTX-Video T5 text encoder (drives the ltxv preflight)
+];
 const DEFAULT_WAN_VAES = ["wan2.2_vae.safetensors", "sdxl_vae.safetensors"];
 
 // Optional node classes a stock ComfyUI + IPAdapter_plus install provides.

@@ -1,6 +1,34 @@
 # Handoff
 
 ## Current state
+**Multi-model video dispatch + LTX-Video — Slice 3 of the "wide variety of SFW models" effort
+(ADR-0015, PR open for review; based on current master, independent of Slices 1/2).** `/animate` was
+Wan-only; it now dispatches across video models by a `model` id. **Wan behavior is byte-identical and
+the default — no caller breaks.**
+
+- **Registry** `src/video-models.ts`: `VIDEO_MODELS: Record<AnimateModel, VideoModelSpec>`. A spec =
+  `{label, files (loaderClass/inputName/file/subdir to preflight), fetchHint, render(params)->graph}`.
+  Pure data + renderers; imports no engine code (no cycle).
+- **Dispatch**: `animateImage` resolves the spec from `params.model` (default `wan-5b`), preflights
+  `spec.files` via a generalized `videoModelsMissing(base, fetchFn, files)`, renders via `spec.render`.
+  The transport (upload → /prompt → poll by own id → /view), never-throw, and 20-min timeout are
+  unchanged. `wanModelsMissing` kept as a thin wrapper (smoke script + tests).
+- **Validation**: `parseAnimateBody` 422s a `model` not in `ANIMATE_MODELS`.
+- **New model `ltxv`** — LTX-Video 2B: `src/ltxv-workflow.ts` + `src/workflows/ltxv-i2v.json`
+  (CheckpointLoaderSimple + CLIPLoader type=ltxv → LTXVImgToVideo → LTXVConditioning/LTXVScheduler +
+  KSamplerSelect → SamplerCustom → VAEDecode → CreateVideo/SaveVideo). LTX grid: dims ×32,
+  **frames 8n+1** (Wan is 4k+1); defaults 768×512, 97 frames, 24 fps. Two files (checkpoint bundles
+  its VAE + a separate T5), both ungated HF → `scripts/fetch-ltxv-models.ts` (pure-HF, reuses the wan
+  script's `planDownloads`; ~11.5 GB). Sizes HF-API-verified.
+- **Tests:** `npm run test:unit` → **130 pass** (116 prior + `video-models.test` + LTX animate/fetch
+  tests). `process.env` absent from `src/`; no runtime deps. Mock advertises the LTX files by default.
+- **NOT render-verified here** (no weights/nodes on this box) — like the Wan foundation, the LTX
+  template's node ids/classes/sampler come from the canonical ComfyUI LTXV i2v template; a
+  real-ComfyUI smoke check is the remaining step. Wan 2.2 14B deferred (dual-expert complexity).
+- **Branch note:** based on current master (has `/animate`); Slices 1/2 were off older master and are
+  independent PRs. This slice needs no Civitai auth (LTX is ungated HF).
+
+### Prior — POST /animate — Wan 2.2 image-to-video endpoint (ADR-0009)
 **POST /animate — Wan 2.2 image-to-video endpoint (ADR-0009, PR open for review).** Cycle 2 of 2.
 Exposes the ADR-0008 pipeline through the service: a still + prompt in → mp4 bytes out. **`generateImage`,
 the SDXL templates, and the `/generate` path are untouched** — the video path is purely additive.
