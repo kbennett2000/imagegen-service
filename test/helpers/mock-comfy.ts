@@ -239,8 +239,31 @@ export class MockComfy {
         this.pollCounts.set(promptId, seen);
 
         if (this.opts.historyError?.(sub.index)) {
+          // Shape a realistic error status the way ComfyUI reports one: the cause lives in the
+          // `execution_error` tuple of `messages`, past the preamble — exactly what the old
+          // 300-char truncation dropped.
           return this.jsonResponse(200, {
-            [promptId]: { status: { status_str: "error", messages: [] }, outputs: {} },
+            [promptId]: {
+              status: {
+                status_str: "error",
+                completed: false,
+                messages: [
+                  ["execution_start", { prompt_id: promptId }],
+                  ["execution_cached", { nodes: ["5", "10"], prompt_id: promptId }],
+                  [
+                    "execution_error",
+                    {
+                      prompt_id: promptId,
+                      node_id: "3",
+                      node_type: "KSampler",
+                      exception_type: "RuntimeError",
+                      exception_message: "mat1 and mat2 shapes cannot be multiplied",
+                    },
+                  ],
+                ],
+              },
+              outputs: {},
+            },
           });
         }
 
