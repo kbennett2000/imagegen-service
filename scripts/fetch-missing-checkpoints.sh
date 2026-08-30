@@ -140,5 +140,6 @@ done
 
 echo
 echo "Finished: $((to_get-failed)) downloaded, $skipped skipped, $failed failed."
-echo "Now restart ComfyUI so it re-scans models/checkpoints/, then check the service: curl -s localhost:8189/health | jq .checkpoints"
+echo "Now make ComfyUI re-scan so the new files appear (no sudo): scripts/rescan-models.sh"
+echo "Then check the service: curl -s localhost:8189/health | jq .checkpoints"
 (( failed > 0 )) && exit 1 || exit 0
