@@ -18,6 +18,19 @@ export interface Config {
   // matching the open-ComfyUI/Chronicle stance. The token gates /generate + /styles for the
   // case where a non-trusted device might join; /health stays open regardless.
   readonly auth: { readonly enabled: boolean; readonly token: string };
+  // Shared-flock GPU tenancy lease (ADR-0012). This service and text-transform-service take turns
+  // owning the one GPU via an advisory lock on `path` — which MUST be byte-identical on both sides.
+  // `maxHoldMs` bounds one lease before yielding (non-preemptive; sized above a full Wan render so a
+  // video never self-yields). `idleGraceMs` keeps the lock briefly after the last job drains, so a
+  // burst reloads the checkpoint once. `acquireTimeoutMs` bounds the blocking wait before failing
+  // open. `enabled` is the kill-switch; false => behave exactly as the pre-lock service.
+  readonly gpuLock: {
+    readonly path: string;
+    readonly maxHoldMs: number;
+    readonly idleGraceMs: number;
+    readonly acquireTimeoutMs: number;
+    readonly enabled: boolean;
+  };
 }
 
 // Last-resort defaults (ADR-0001): host 0.0.0.0 is LAN-exposed BY DESIGN.
@@ -26,6 +39,15 @@ export const CONFIG_DEFAULTS: Config = {
   comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "" },
   server: { host: "0.0.0.0", port: 8189 },
   auth: { enabled: false, token: "" },
+  // tmpfs path, cleared on reboot; falls back to /var/lock/gpu-tenant.lock where /run isn't writable.
+  // maxHoldMs 21 min > ANIMATE_TIMEOUT_MS (20 min) so a full Wan render finishes without self-yielding.
+  gpuLock: {
+    path: "/run/gpu-tenant.lock",
+    maxHoldMs: 1_260_000,
+    idleGraceMs: 5_000,
+    acquireTimeoutMs: 120_000,
+    enabled: true,
+  },
 };
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

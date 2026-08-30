@@ -1,6 +1,51 @@
 # Handoff
 
 ## Current state
+**Shared-flock GPU tenancy lease (ADR-0012, PR open for review).** GPU exclusivity moves server-side:
+this service and text-transform-service take turns owning the one GPU through a shared advisory
+`flock`, so callers no longer need to know about the GPU (supersedes the old caller-side `/free`
+convention). This is the imagegen-service half.
+
+- **Lease** `src/gpu-lease.ts` — a process-wide `GpuLease`, refcounted (held-while-busy, NOT
+  per-request). Acquires the flock on 0→1, holds while any GPU job is in flight (a batch drains under
+  one lease → checkpoint loads once), and on returning to 0 for `idleGraceMs` (or at `maxHoldMs`)
+  **POSTs ComfyUI `/free` THEN releases** the flock (free-before-release — the cross-service ordering
+  contract). Non-preemptive: never frees mid-job; `maxHoldMs` (21 min) sits above `ANIMATE_TIMEOUT_MS`
+  (20 min) so a full Wan render never self-yields. **Fail-open**: lockfile unopenable / acquire
+  timeout / `enabled:false` → log + proceed WITHOUT the lock (and don't free). Crash-safe: the kernel
+  drops the flock on process death (no TTL/heartbeat).
+- **Lock primitive: shell out to `flock(1)`** — real kernel advisory lock, kernel crash-release,
+  **zero npm deps** (a system tool like ffmpeg/curl, per ADR-0010; `package.json` still has no
+  `dependencies`). A long-lived `flock … -c 'printf R; exec cat'` child holds the fd; closing its
+  stdin (or this process dying) releases. The provider is an injectable `LockProvider` so tests use an
+  in-memory fake; a real-`flock(1)` smoke test skips where `flock` isn't installed.
+- **Guarded paths** `POST /generate` + `POST /animate` (wrapped `lease.run(() => …)` in the handlers;
+  engine per-request `prompt_id` isolation unchanged). **NOT gated:** `/stitch` (CPU), `/health`,
+  `/styles`. **`freeComfy()`** added to `src/engine.ts` (POST `{comfyui.url}/free`
+  `{unload_models,free_memory}`; targets :8188, never :8189; never throws).
+- **Config** new `gpuLock` block (`path` `/run/gpu-tenant.lock`, `maxHoldMs` 1_260_000, `idleGraceMs`
+  5_000, `acquireTimeoutMs` 120_000, `enabled` true) in `src/config.ts` + `config.example.json`
+  (picked up by the existing `deepMerge`; no-env invariant intact). Observability: per-lease id logs
+  `acquired / drained N / freed comfyui / released` + every fail-open.
+- **Tests** `test/gpu-lease.test.ts` (8): held-while-busy refcount (one acquire, one `/free` per
+  batch), free-before-release ordering, `/stitch` + `/health` not gated, fail-open on lock failure,
+  `enabled:false` bypass, long `/animate` holds one lease, real-`flock(1)` mutual-exclusion smoke.
+  MockComfy gained a `/free` route (`freeCalls` + `onFree`). `npm run test:unit` green;
+  `grep -rn process.env src/` still empty.
+- **⚠️ Coordinate with text-transform-service** (the mirror half). Only three things must match
+  exactly: the **lockfile path** `/run/gpu-tenant.lock`, the **free-before-release ordering**, and the
+  **fail-open** semantics. Timing knobs may differ (our `maxHoldMs` is much larger because of video).
+- **⚠️ Running service on :8189 is a systemd unit** serving the working tree on OLD code; a human runs
+  `sudo systemctl restart imagegen-service` after merge to pick this up (needs `flock(1)` on PATH,
+  standard on Linux).
+- **Note:** the working tree also carries pre-existing, uncommitted ADR-0011 (first-last-frame
+  animate) WIP that predates this cycle and is not part of this PR — left untouched for its own cycle.
+
+### Prior — POST /animate — Wan 2.2 image-to-video endpoint (ADR-0009, PR open for review). Cycle 2 of 2.
+Exposes the ADR-0008 pipeline through the service: a still + prompt in → mp4 bytes out. **`generateImage`,
+the SDXL templates, and the `/generate` path are untouched** — the video path is purely additive.
+
+### Prior — Popular SFW models from Civitai (ADR-0016)
 **Popular SFW models from Civitai (ADR-0016, PR open for review; off master).** Extends the catalog
 with 6 checkpoints (`dreamshaper`, `realcartoon`, `nightvision`, `colorful`, `samaritan3d`,
 `starlight`) and 11 style LoRAs (ink wash, flat vector, travel poster, sticker, gouache, charcoal,
