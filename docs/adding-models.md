@@ -185,9 +185,15 @@ Mind the 12 GB ceiling (§0): stay in the TI2V-5B-class fp16 range — 14B is no
 - **Image smoke** — `POST /generate` naming the new checkpoint or style.
 - **Video smoke** — `scripts/smoke-wan22.ts` (fails loudly if a Wan model is missing).
 
-If a newly added file doesn't show up: you almost certainly **didn't restart ComfyUI**, or the
-filename in your config / recipe doesn't match the file on disk **byte-for-byte** (a trailing space,
-a version suffix, `.safetensors` vs `.ckpt`).
+If a newly added file doesn't show up: ComfyUI hasn't re-scanned since you added it (it reads the
+model list once at startup and caches it). Force a re-scan without a root restart:
+
+```bash
+scripts/rescan-models.sh    # ComfyUI-Manager reboot, runs as your user — no sudo
+```
+
+If it still doesn't appear, the filename in your config / recipe doesn't match the file on disk
+**byte-for-byte** (a trailing space, a version suffix, `.safetensors` vs `.ckpt`).
 
 ---
 
@@ -285,3 +291,19 @@ it's unmounted, those models drop out of the dropdown and the scripts stop seein
 re-download). For a permanent setup, give the drive a stable mountpoint in `/etc/fstab` and use that
 path everywhere instead. Also prefer a real Linux filesystem (ext4/xfs/btrfs) over exFAT/NTFS for the
 model drive.
+
+**Mount-timing gotcha (and the fix).** ComfyUI scans model folders *once, at startup*. If ComfyUI
+starts (or is restarted) while the second drive isn't mounted yet — e.g. a desktop auto-mount that
+lands a few seconds after boot — it scans an empty folder and every model on that drive stays
+invisible until the next re-scan, even after the drive is back. When models on the second drive are
+missing but the files are there on disk, don't chase it in the service (its `/health` only mirrors
+ComfyUI) — force a re-scan:
+
+```bash
+scripts/rescan-models.sh        # no sudo; prints the before → after count and what showed up
+```
+
+For a durable fix, make ComfyUI start only after the drive is mounted: give the drive a stable
+`/etc/fstab` mountpoint (with `nofail`) and add `RequiresMountsFor=<that path>` to
+`comfyui.service`. (A `udisks` auto-mount under `/run/media` isn't a boot-time mount unit, so
+ordering against it isn't reliable — the fstab mountpoint is what makes the dependency work.)
