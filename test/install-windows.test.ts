@@ -37,7 +37,7 @@ function cudaRegexFromInstaller(): RegExp {
   assert.ok(line, "no CUDA '-match' line found in install-windows.ps1");
   const m = line.match(/-match\s+'([^']+)'/);
   assert.ok(m, `could not extract the regex literal from: ${line}`);
-  return new RegExp(m[1]);
+  return new RegExp(m[1]!);
 }
 
 test("driver-gate regex reads the CUDA version from the old banner (CUDA Version: 12.8)", () => {
