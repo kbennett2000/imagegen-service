@@ -11,5 +11,12 @@
   "auth": {
     "enabled": false,
     "token": ""
+  },
+  "gpuLock": {
+    "path": "/var/lock/gpu-tenant.lock",
+    "maxHoldMs": 1260000,
+    "idleGraceMs": 5000,
+    "acquireTimeoutMs": 120000,
+    "enabled": true
   }
 }

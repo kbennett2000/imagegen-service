@@ -81,6 +81,14 @@ const CONFIG: Config = {
   comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "" },
   server: { host: "127.0.0.1", port: 0 },
   auth: { enabled: false, token: "" },
+  // Lease disabled: /stitch is never gated anyway, and lease.run() is a passthrough here.
+  gpuLock: {
+    path: "/var/lock/gpu-tenant.lock",
+    maxHoldMs: 1_260_000,
+    idleGraceMs: 5_000,
+    acquireTimeoutMs: 120_000,
+    enabled: false,
+  },
 };
 
 const okStitch = async () => ({ ok: true as const, bytes: Buffer.from("JOINED") });

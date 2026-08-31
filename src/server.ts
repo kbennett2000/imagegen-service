@@ -19,6 +19,7 @@ import {
   type GenerateParams,
   type Quality,
 } from "./engine.js";
+import { GpuLease, type LockProvider } from "./gpu-lease.js";
 import { STYLE_LORAS } from "./style-loras.js";
 import { CHECKPOINTS, resolveCheckpoint } from "./checkpoints.js";
 import { ffmpegAvailable as ffmpegAvailableDefault, stitchVideos as stitchVideosDefault, type StitchResult } from "./stitch.js";
@@ -42,6 +43,9 @@ const MAX_CLIPS = 50;
 export interface ServerDeps {
   stitchVideos?: (clips: Buffer[]) => Promise<StitchResult>;
   ffmpegAvailable?: () => Promise<boolean>;
+  // Shared-flock GPU lease provider (ADR-0012), injected in tests to drive the lease with an
+  // in-memory lock (no filesystem, no real flock). Default: the real flock(1)-backed provider.
+  lockProvider?: LockProvider;
 }
 
 // The built-in dev/test page, served at GET / and GET /index.html. Read once at module load
@@ -375,6 +379,7 @@ async function handleGenerate(
   res: ServerResponse,
   config: Config,
   fetchFn: FetchFn,
+  lease: GpuLease,
 ): Promise<void> {
   let raw: string;
   try {
@@ -396,7 +401,10 @@ async function handleGenerate(
   if (parsed.params.upscale && !parsed.params.upscaleModel && config.comfyui.upscaleModel) {
     parsed.params.upscaleModel = config.comfyui.upscaleModel;
   }
-  const result = await generateImage(config.comfyui.url, parsed.params, fetchFn);
+  // Run inside the shared GPU lease: hold the flock while busy, free ComfyUI + release once the batch
+  // drains (ADR-0012). The lease sits around the whole engine call; the per-request prompt_id
+  // isolation inside the engine is unchanged.
+  const result = await lease.run(() => generateImage(config.comfyui.url, parsed.params, fetchFn));
   if (result.ok) {
     sendPng(res, result.bytes);
   } else {
@@ -410,6 +418,7 @@ async function handleAnimate(
   res: ServerResponse,
   config: Config,
   fetchFn: FetchFn,
+  lease: GpuLease,
 ): Promise<void> {
   let raw: string;
   try {
@@ -423,7 +432,9 @@ async function handleAnimate(
     sendJson(res, 422, { error: parsed.error });
     return;
   }
-  const result = await animateImage(config.comfyui.url, parsed.params, fetchFn);
+  // Same shared GPU lease as /generate. A long Wan render legitimately holds the whole time; maxHoldMs
+  // is sized above ANIMATE_TIMEOUT_MS so it never self-yields mid-video (ADR-0012).
+  const result = await lease.run(() => animateImage(config.comfyui.url, parsed.params, fetchFn));
   if (result.ok) {
     sendBytes(res, result.bytes, result.contentType);
   } else {
@@ -536,6 +547,19 @@ async function handleHealth(
 export function createServer(config: Config, fetchFn: FetchFn = fetch, deps: ServerDeps = {}): Server {
   const stitch = deps.stitchVideos ?? stitchVideosDefault;
   const ffmpegCheck = deps.ffmpegAvailable ?? (() => ffmpegAvailableDefault());
+  // The single process-wide GPU lease shared by every /generate and /animate request (ADR-0012).
+  // Defensive on config.gpuLock: a partial test Config without the block reads as disabled (bypass).
+  const gpuLock = config.gpuLock;
+  const lease = new GpuLease({
+    enabled: gpuLock?.enabled === true,
+    path: gpuLock?.path ?? "/var/lock/gpu-tenant.lock",
+    maxHoldMs: gpuLock?.maxHoldMs ?? 1_260_000,
+    idleGraceMs: gpuLock?.idleGraceMs ?? 5_000,
+    acquireTimeoutMs: gpuLock?.acquireTimeoutMs ?? 120_000,
+    comfyUrl: config.comfyui.url,
+    fetchFn,
+    provider: deps.lockProvider,
+  });
   return createHttpServer((req, res) => {
     // Top-level guard: nothing below may throw out of the handler.
     void (async () => {
@@ -554,7 +578,7 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch, deps: Ser
             sendJson(res, 401, { error: "unauthorized" });
             return;
           }
-          await handleGenerate(req, res, config, fetchFn);
+          await handleGenerate(req, res, config, fetchFn, lease);
           return;
         }
         if (method === "POST" && url === "/animate") {
@@ -562,7 +586,7 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch, deps: Ser
             sendJson(res, 401, { error: "unauthorized" });
             return;
           }
-          await handleAnimate(req, res, config, fetchFn);
+          await handleAnimate(req, res, config, fetchFn, lease);
           return;
         }
         if (method === "POST" && url === "/stitch") {

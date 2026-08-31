@@ -1,6 +1,19 @@
 # Handoff
 
 ## Current state
+**Shared-flock GPU tenancy lease landed on master (ADR-0012).** GPU exclusivity is server-side: this
+service and text-transform-service take turns owning the one GPU through a shared advisory `flock`
+(`src/gpu-lease.ts` — process-wide, refcounted, held-while-busy). On returning to idle it **POSTs
+ComfyUI `/free` THEN releases** the flock (free-before-release, the cross-service ordering contract);
+**fail-open** if the lock can't be taken. `POST /generate` and `POST /animate` are wrapped in
+`lease.run(…)`; `/stitch`/`/health`/`/styles` are not gated. `freeComfy()` added to `src/engine.ts`.
+Config `gpuLock` block in `src/config.ts` + `config.example.json`; **default lock path
+`/var/lock/gpu-tenant.lock`** (byte-identical to text-transform-service's `GPU_LOCK_PATH`) so a
+non-root service user can create the lockfile — `/run` needs root and would silently fail open,
+stranding VRAM. Tests: `test/gpu-lease.test.ts`. (Originally PR #26, which merged onto the wrong base
+and never reached master; re-landed here.)
+
+### Prior — Popular SFW models from Civitai (ADR-0016)
 **Popular SFW models from Civitai (ADR-0016, PR open for review; off master).** Extends the catalog
 with 6 checkpoints (`dreamshaper`, `realcartoon`, `nightvision`, `colorful`, `samaritan3d`,
 `starlight`) and 11 style LoRAs (ink wash, flat vector, travel poster, sticker, gouache, charcoal,
