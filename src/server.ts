@@ -552,7 +552,7 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch, deps: Ser
   const gpuLock = config.gpuLock;
   const lease = new GpuLease({
     enabled: gpuLock?.enabled === true,
-    path: gpuLock?.path ?? "/run/gpu-tenant.lock",
+    path: gpuLock?.path ?? "/var/lock/gpu-tenant.lock",
     maxHoldMs: gpuLock?.maxHoldMs ?? 1_260_000,
     idleGraceMs: gpuLock?.idleGraceMs ?? 5_000,
     acquireTimeoutMs: gpuLock?.acquireTimeoutMs ?? 120_000,

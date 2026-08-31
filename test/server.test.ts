@@ -8,10 +8,21 @@ import { CHECKPOINTS } from "../src/checkpoints.ts";
 import { STYLE_LORAS } from "../src/style-loras.ts";
 import { MockComfy } from "./helpers/mock-comfy.ts";
 
+// Lease disabled in these tests: `enabled:false` makes lease.run() a passthrough, so the
+// server behaves exactly as it did before the GPU lease (ADR-0012) — no flock is taken.
+const GPU_LOCK: Config["gpuLock"] = {
+  path: "/var/lock/gpu-tenant.lock",
+  maxHoldMs: 1_260_000,
+  idleGraceMs: 5_000,
+  acquireTimeoutMs: 120_000,
+  enabled: false,
+};
+
 const CONFIG: Config = {
-  comfyui: { url: "http://localhost:8188", checkpoint: "" },
+  comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "" },
   server: { host: "127.0.0.1", port: 0 },
   auth: { enabled: false, token: "" },
+  gpuLock: GPU_LOCK,
 };
 
 // Start the service on an ephemeral port with an injected mock ComfyUI; return base URL + close.
@@ -168,9 +179,10 @@ test("unknown route -> 404 JSON", async () => {
 // ---- Optional shared-token auth (ADR-0002) ----
 
 const AUTH_CONFIG: Config = {
-  comfyui: { url: "http://localhost:8188", checkpoint: "" },
+  comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "" },
   server: { host: "127.0.0.1", port: 0 },
   auth: { enabled: true, token: "s3cret-token" },
+  gpuLock: GPU_LOCK,
 };
 
 // ---- Built-in dev/test UI (served at / and /index.html) ----
@@ -320,9 +332,10 @@ test("auth enabled -> /health stays open with no token", async () => {
 test("auth enabled but token unset -> fails closed (401 even with a bearer header)", async () => {
   const mock = new MockComfy();
   const misconfigured: Config = {
-    comfyui: { url: "http://localhost:8188", checkpoint: "" },
+    comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "" },
     server: { host: "127.0.0.1", port: 0 },
     auth: { enabled: true, token: "" },
+    gpuLock: GPU_LOCK,
   };
   const svc = await startService(mock, misconfigured);
   try {
@@ -374,9 +387,10 @@ test("POST /generate -> 422 on a non-multiple-of-8 dimension", async () => {
 test("POST /generate -> config default checkpoint applied when the request omits one", async () => {
   const mock = new MockComfy();
   const config: Config = {
-    comfyui: { url: "http://localhost:8188", checkpoint: "sd_xl_refiner_1.0.safetensors" },
+    comfyui: { url: "http://localhost:8188", checkpoint: "sd_xl_refiner_1.0.safetensors", upscaleModel: "" },
     server: { host: "127.0.0.1", port: 0 },
     auth: { enabled: false, token: "" },
+    gpuLock: GPU_LOCK,
   };
   const svc = await startService(mock, config);
   try {
@@ -395,9 +409,10 @@ test("POST /generate -> config default checkpoint applied when the request omits
 test("POST /generate -> request checkpoint overrides the config default", async () => {
   const mock = new MockComfy();
   const config: Config = {
-    comfyui: { url: "http://localhost:8188", checkpoint: "config_default.safetensors" },
+    comfyui: { url: "http://localhost:8188", checkpoint: "config_default.safetensors", upscaleModel: "" },
     server: { host: "127.0.0.1", port: 0 },
     auth: { enabled: false, token: "" },
+    gpuLock: GPU_LOCK,
   };
   const svc = await startService(mock, config);
   try {
@@ -436,9 +451,10 @@ test("GET /health -> reports the effective checkpoint and installed checkpoint l
     checkpoints: ["sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"],
   });
   const config: Config = {
-    comfyui: { url: "http://localhost:8188", checkpoint: "sd_xl_refiner_1.0.safetensors" },
+    comfyui: { url: "http://localhost:8188", checkpoint: "sd_xl_refiner_1.0.safetensors", upscaleModel: "" },
     server: { host: "127.0.0.1", port: 0 },
     auth: { enabled: false, token: "" },
+    gpuLock: GPU_LOCK,
   };
   const svc = await startService(mock, config);
   try {
@@ -570,6 +586,7 @@ test("POST /generate -> config default upscaleModel applied when none requested"
     comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "configured.pth" },
     server: { host: "127.0.0.1", port: 0 },
     auth: { enabled: false, token: "" },
+    gpuLock: GPU_LOCK,
   };
   const svc = await startService(mock, config);
   try {

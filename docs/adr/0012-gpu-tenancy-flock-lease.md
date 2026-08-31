@@ -24,9 +24,10 @@ the imagegen-service implementation of it.
 ## Decision
 
 ### One advisory lock, refcounted, held-while-busy
-A single `flock(2)` exclusive lock on a well-known lockfile — `/run/gpu-tenant.lock` (tmpfs, cleared
-on reboot; falls back to `/var/lock/gpu-tenant.lock`) — that this service and text-transform-service
-both honor. Whoever holds it owns the whole GPU: it loads its models, drains its queued work under
+A single `flock(2)` exclusive lock on a well-known lockfile — `/var/lock/gpu-tenant.lock` (world-
+writable sticky dir, so the non-root service user can create it; `/run` would need root and silently
+fail open) — that this service and text-transform-service both honor. The path is byte-identical to
+text-transform-service's `GPU_LOCK_PATH` — the two must name the same file or they don't share a lock. Whoever holds it owns the whole GPU: it loads its models, drains its queued work under
 that one lease (hold-and-drain), frees its own VRAM, then releases. A `GpuLease` (`src/gpu-lease.ts`)
 keeps an in-flight counter of GPU jobs; it acquires the flock on 0→1, **holds while the count is >0**
 letting requests keep pipelining into ComfyUI's queue as before, and releases after the count returns

@@ -39,10 +39,12 @@ export const CONFIG_DEFAULTS: Config = {
   comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "" },
   server: { host: "0.0.0.0", port: 8189 },
   auth: { enabled: false, token: "" },
-  // tmpfs path, cleared on reboot; falls back to /var/lock/gpu-tenant.lock where /run isn't writable.
+  // /var/lock is world-writable (sticky) so the non-root service user (kb) can create the lockfile;
+  // /run needs root and would silently fail open, stranding VRAM. Byte-identical to
+  // text-transform-service's GPU_LOCK_PATH so the two services share the one advisory flock.
   // maxHoldMs 21 min > ANIMATE_TIMEOUT_MS (20 min) so a full Wan render finishes without self-yielding.
   gpuLock: {
-    path: "/run/gpu-tenant.lock",
+    path: "/var/lock/gpu-tenant.lock",
     maxHoldMs: 1_260_000,
     idleGraceMs: 5_000,
     acquireTimeoutMs: 120_000,

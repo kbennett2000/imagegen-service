@@ -14,6 +14,14 @@ const CONFIG: Config = {
   comfyui: { url: URL, checkpoint: "", upscaleModel: "" },
   server: { host: "127.0.0.1", port: 0 },
   auth: { enabled: false, token: "" },
+  // Lease disabled: lease.run() is a passthrough, so /animate behaves as before ADR-0012.
+  gpuLock: {
+    path: "/var/lock/gpu-tenant.lock",
+    maxHoldMs: 1_260_000,
+    idleGraceMs: 5_000,
+    acquireTimeoutMs: 120_000,
+    enabled: false,
+  },
 };
 
 async function startService(

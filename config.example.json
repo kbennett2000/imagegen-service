@@ -13,7 +13,7 @@
     "token": ""
   },
   "gpuLock": {
-    "path": "/run/gpu-tenant.lock",
+    "path": "/var/lock/gpu-tenant.lock",
     "maxHoldMs": 1260000,
     "idleGraceMs": 5000,
     "acquireTimeoutMs": 120000,
