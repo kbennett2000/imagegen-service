@@ -1,6 +1,21 @@
 # Handoff
 
 ## Current state
+**Checkpoint subfolder groups + basename reconciliation (ADR-0019, branch
+`feat/checkpoint-subfolder-groups`, PR open for review).** ComfyUI lists checkpoints relative to each
+configured root, so a subfoldered model reads as `s/foo.safetensors` while the catalog and workflow
+templates use bare names — which made every subfoldered model show "not installed" and fail to load
+(default and refiner included). Fix: `src/checkpoints.ts` gains `checkpointBasename`,
+`checkpointInstalled`, `reconcileCheckpoint` (pure); `generateImage` reconciles every
+`CheckpointLoaderSimple` node (base `4` + refiner `11`) against ComfyUI's live list by basename;
+`/checkpoints` + `/health` flag installed by basename and report the default as the exact name
+ComfyUI advertises; `src/ui.html` groups the installed picker into one `<optgroup>` per subfolder
+(clean basename shown, full name as the option value). Tolerates flat **and** subfoldered layouts.
+**Operator step to see grouping live:** point `extra_model_paths.yaml` `checkpoints:` at the parent
+`checkpoints/` (so ComfyUI recurses and prefixes `s/…`, `ns/…`) and restart ComfyUI — this reverses
+the flat-name stopgap that had listed the leaf subfolders as roots. Tests: 170 pass, tsc clean.
+
+### Prior — Shared-flock GPU tenancy lease (ADR-0012)
 **Shared-flock GPU tenancy lease landed on master (ADR-0012).** GPU exclusivity is server-side: this
 service and text-transform-service take turns owning the one GPU through a shared advisory `flock`
 (`src/gpu-lease.ts` — process-wide, refcounted, held-while-busy). On returning to idle it **POSTs

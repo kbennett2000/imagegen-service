@@ -491,16 +491,31 @@
 
       const frag = document.createDocumentFragment();
       if (installed.length) {
-        const g = document.createElement("optgroup");
-        g.label = "Installed";
+        // Group installed checkpoints by their subfolder so a split models dir reads as sections.
+        // ComfyUI reports each name relative to its root, so "s/foo.safetensors" groups under "s"
+        // showing just "foo.safetensors"; a bare name groups under "Installed" (ADR-0019). The
+        // option VALUE stays the full name ComfyUI reported (that's what /generate needs).
+        const groups = new Map(); // folder label -> [full names], in first-seen order
         for (const name of installed) {
-          const opt = document.createElement("option");
-          opt.value = name;
-          opt.textContent = name + (name === defaultCheckpoint ? "  (default)" : "");
-          if (name === defaultCheckpoint) opt.selected = true;
-          g.appendChild(opt);
+          const slash = name.lastIndexOf("/");
+          const label = slash === -1 ? "Installed" : name.slice(0, slash);
+          if (!groups.has(label)) groups.set(label, []);
+          groups.get(label).push(name);
         }
-        frag.appendChild(g);
+        for (const [label, names] of groups) {
+          const g = document.createElement("optgroup");
+          g.label = label;
+          for (const name of names) {
+            const slash = name.lastIndexOf("/");
+            const base = slash === -1 ? name : name.slice(slash + 1);
+            const opt = document.createElement("option");
+            opt.value = name;
+            opt.textContent = base + (name === defaultCheckpoint ? "  (default)" : "");
+            if (name === defaultCheckpoint) opt.selected = true;
+            g.appendChild(opt);
+          }
+          frag.appendChild(g);
+        }
       } else {
         const opt = document.createElement("option");
         opt.value = ""; opt.textContent = "(service default)";

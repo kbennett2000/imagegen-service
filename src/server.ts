@@ -21,7 +21,7 @@ import {
 } from "./engine.js";
 import { GpuLease, type LockProvider } from "./gpu-lease.js";
 import { STYLE_LORAS } from "./style-loras.js";
-import { CHECKPOINTS, resolveCheckpoint } from "./checkpoints.js";
+import { CHECKPOINTS, checkpointInstalled, reconcileCheckpoint, resolveCheckpoint } from "./checkpoints.js";
 import { ffmpegAvailable as ffmpegAvailableDefault, stitchVideos as stitchVideosDefault, type StitchResult } from "./stitch.js";
 import { MAX_FRAMES } from "./wan-workflow.js";
 import { ANIMATE_MODELS, isAnimateModel } from "./video-models.js";
@@ -498,7 +498,8 @@ async function handleCheckpoints(res: ServerResponse, config: Config, fetchFn: F
     name,
     file: info.file,
     description: info.description,
-    installed: installed.includes(info.file),
+    // Matched by basename so a subfoldered install ("s/foo.safetensors") still reads installed (ADR-0019).
+    installed: checkpointInstalled(info.file, installed),
   }));
   sendJson(res, 200, {
     checkpoints,
@@ -516,12 +517,14 @@ async function handleHealth(
   // Report which recipe LoRAs are actually present on the GPU host.
   const recipeFiles = Array.from(new Set(Object.values(STYLE_LORAS).map((r) => r.loraFile)));
   const lorasLoaded = recipeFiles.filter((f) => loras.includes(f));
-  // Same for the curated checkpoint catalog: which of its files are actually installed.
+  // Same for the curated checkpoint catalog: which of its files are actually installed. Matched by
+  // basename so a subfoldered install ("s/foo.safetensors") still counts (ADR-0019).
   const catalogCheckpoints = Array.from(new Set(Object.values(CHECKPOINTS).map((c) => c.file)));
-  const checkpointsInstalled = catalogCheckpoints.filter((f) => checkpoints.includes(f));
+  const checkpointsInstalled = catalogCheckpoints.filter((f) => checkpointInstalled(f, checkpoints));
   // The effective default checkpoint (config override, else the workflow template's), plus the full
-  // list ComfyUI can load so a client can offer a picker.
-  const checkpoint = config.comfyui.checkpoint || DEFAULT_CHECKPOINT;
+  // list ComfyUI can load so a client can offer a picker. Reconcile the default to the exact name
+  // ComfyUI reports (with any subfolder prefix) so a picker can match and mark it (ADR-0019).
+  const checkpoint = reconcileCheckpoint(config.comfyui.checkpoint || DEFAULT_CHECKPOINT, checkpoints);
   // Effective default upscale model (config override, else the first installed) + the full list.
   const upscaleModel = config.comfyui.upscaleModel || upscaleModels[0] || "";
   // Image-to-video readiness (ADR-0009): which of the three Wan 2.2 files are present. Best-effort —

@@ -680,6 +680,39 @@ test("GET /checkpoints -> lists the catalog, each flagged installed per ComfyUI"
   }
 });
 
+test("GET /checkpoints -> a subfoldered install still reads installed (basename match, ADR-0019)", async () => {
+  const first = Object.values(CHECKPOINTS)[0]?.file;
+  if (!first) return; // empty catalog — nothing to assert
+  // ComfyUI reports the catalog file under an "s/" subfolder; it must still flag installed.
+  const mock = new MockComfy({ checkpoints: [`s/${first}`] });
+  const svc = await startService(mock);
+  try {
+    const body = (await (await fetch(`${svc.base}/checkpoints`)).json()) as any;
+    const row = body.checkpoints.find((c: any) => c.file === first);
+    assert.equal(row.installed, true);
+  } finally {
+    await svc.close();
+  }
+});
+
+test("GET /health -> subfoldered install: installed by basename + default reconciled to the prefixed name (ADR-0019)", async () => {
+  const catalogFile = Object.values(CHECKPOINTS)[0]?.file;
+  const mock = new MockComfy({
+    checkpoints: ["s/sd_xl_base_1.0.safetensors", ...(catalogFile ? [`s/${catalogFile}`] : [])],
+  });
+  const svc = await startService(mock); // CONFIG.checkpoint is "" -> falls back to the template default
+  try {
+    const body = (await (await fetch(`${svc.base}/health`)).json()) as any;
+    // The bare template default is reported as the exact subfoldered name ComfyUI advertises, so a
+    // picker can match and mark it as the default.
+    assert.equal(body.checkpoint, "s/sd_xl_base_1.0.safetensors");
+    // checkpointsInstalled reports the catalog by its bare filename, matched by basename.
+    if (catalogFile) assert.ok(body.checkpointsInstalled.includes(catalogFile));
+  } finally {
+    await svc.close();
+  }
+});
+
 test("auth enabled -> /checkpoints 401 without token, 200 with token", async () => {
   const mock = new MockComfy();
   const svc = await startService(mock, AUTH_CONFIG);
