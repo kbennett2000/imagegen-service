@@ -236,14 +236,15 @@
       <label for="animPipeline">Pipeline <span class="hint">(which workflow drives the model)</span></label>
       <select id="animPipeline">
         <option value="wan22-ti2v" selected>Wan 2.2 TI2V (48-channel, image → video)</option>
-        <option value="wan21-i2v">Wan 2.1 I2V (16-channel, image → video)</option>
+        <option value="wan21-i2v">Wan 2.1 I2V (36-channel, image → video)</option>
         <option value="wan-t2v">Wan T2V (16-channel, text → video, no picture)</option>
       </select>
       <p class="hint" style="margin:.3rem 0 0">
         Each video model is built for one architecture — pick the pipeline that matches. A model run
-        through the wrong pipeline reports as incompatible. Wan 2.2 TI2V 5B → the first option; Wan 2.1
-        image-to-video models (incl. GGUF fast models) → the second.
+        through the wrong pipeline reports as incompatible. When auto-detection is configured on the
+        server, choosing a model sets this for you.
       </p>
+      <p class="status ok" id="animAutoNote" hidden style="margin:.4rem 0 0"></p>
 
       <label for="animModel">Model <span class="hint">(installed image-to-video models)</span></label>
       <select id="animModel"><option value="">(loading…)</option></select>
@@ -522,6 +523,7 @@
       sel.replaceChildren(frag);
       sel.disabled = false;
       if (prev) sel.value = prev; // keep a prior pick across refreshes when it's still installed
+      autoDetectPipeline(); // pre-select the matching pipeline for the (default- or prior-) selected model
     }
 
     // Enable the Upscale control only when ComfyUI has an upscale model installed. The model dropdown
@@ -1014,8 +1016,37 @@
       $("animImageBlock").hidden = textOnly;
       $("animImageReq").textContent = textOnly ? "(not used)" : "(required)";
     }
-    $("animPipeline").addEventListener("change", syncPipelineUi);
+    $("animPipeline").addEventListener("change", () => { autoNoteFor(null); syncPipelineUi(); });
     syncPipelineUi();
+
+    // Auto-detect the pipeline for the chosen model (ADR-0023): ask the server, which reads the model
+    // file header, and pre-select the matching pipeline. Best-effort — if the server can't tell (auto-
+    // detection not configured, file not found, unknown format) the current choice is left untouched.
+    const PIPELINE_LABEL = {
+      "wan22-ti2v": "Wan 2.2 TI2V", "wan21-i2v": "Wan 2.1 I2V", "wan-t2v": "Wan T2V (text → video)",
+    };
+    let lastAutoModel = null;
+    function autoNoteFor(text) {
+      const n = $("animAutoNote");
+      n.hidden = !text;
+      if (text) n.textContent = text;
+    }
+    async function autoDetectPipeline() {
+      const model = $("animModel").value;
+      if (!model || model === lastAutoModel) return;
+      lastAutoModel = model;
+      try {
+        const res = await fetch("/detect-pipeline?model=" + encodeURIComponent(model), { headers: authHeaders() });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (d && d.pipeline && PIPELINE_LABEL[d.pipeline]) {
+          $("animPipeline").value = d.pipeline;
+          syncPipelineUi();
+          autoNoteFor("Auto-selected " + PIPELINE_LABEL[d.pipeline] + " (" + d.channels + "-channel) for this model.");
+        }
+      } catch { /* leave the current pipeline choice as-is */ }
+    }
+    $("animModel").addEventListener("change", autoDetectPipeline);
 
     $("animForm").addEventListener("submit", async (ev) => {
       ev.preventDefault();

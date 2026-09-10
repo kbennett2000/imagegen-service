@@ -29,6 +29,7 @@ import { CHECKPOINTS, checkpointInstalled, reconcileCheckpoint, resolveCheckpoin
 import { ffmpegAvailable as ffmpegAvailableDefault, stitchVideos as stitchVideosDefault, type StitchResult } from "./stitch.js";
 import { MAX_FRAMES } from "./wan-workflow.js";
 import { ANIMATE_MODELS, isAnimateModel } from "./video-models.js";
+import { detectPipeline } from "./model-arch.js";
 
 // CreateVideo caps fps at 120.
 const MAX_FPS = 120;
@@ -545,6 +546,30 @@ async function handleCheckpoints(res: ServerResponse, config: Config, fetchFn: F
   });
 }
 
+// GET /detect-pipeline?model=<exact ComfyUI name> — best-effort architecture detection (ADR-0023).
+// Reads the model file header from the configured diffusion-model dirs and returns the pipeline that
+// drives it, so the UI can pre-select it. Never throws; `pipeline: null` when it can't tell (dirs
+// unset, file not found under them, or unknown format) and the caller keeps its current choice.
+async function handleDetectPipeline(res: ServerResponse, config: Config, rawUrl: string): Promise<void> {
+  const model = new URL(rawUrl, "http://localhost").searchParams.get("model") ?? "";
+  const err = modelNameError("model", model);
+  if (err) {
+    sendJson(res, 422, { error: err });
+    return;
+  }
+  const dirs = config.comfyui.diffusionModelDirs;
+  if (!dirs || dirs.length === 0) {
+    sendJson(res, 200, { pipeline: null, reason: "auto-detection not configured (set comfyui.diffusionModelDirs)" });
+    return;
+  }
+  const detected = await detectPipeline(model, dirs).catch(() => null);
+  if (!detected) {
+    sendJson(res, 200, { pipeline: null, reason: "could not determine the model's architecture" });
+    return;
+  }
+  sendJson(res, 200, { pipeline: detected.pipeline, channels: detected.channels });
+}
+
 async function handleHealth(
   res: ServerResponse,
   config: Config,
@@ -658,6 +683,14 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch, deps: Ser
             return;
           }
           await handleCheckpoints(res, config, fetchFn);
+          return;
+        }
+        if (method === "GET" && url === "/detect-pipeline") {
+          if (!isAuthorized(req, config)) {
+            sendJson(res, 401, { error: "unauthorized" });
+            return;
+          }
+          await handleDetectPipeline(res, config, req.url ?? "");
           return;
         }
         // /health is intentionally NEVER gated — monitoring must work without the token.

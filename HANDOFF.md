@@ -57,10 +57,19 @@ architecture (4096-dim text encoder, double_blocks) and its support files are NO
 box — no Hunyuan VAE, no `llava_llama3`/`clip_l` encoders (only Wan/SDXL are present) — so any Hunyuan
 pipeline would just fail preflight; it is also 13.2 GB fp8, over 12 GB VRAM. VACE/Fun are control
 models needing extra control inputs (pose/video), a different use case. 14B fp16 Wan models exceed
-12 GB. **Highest-value remaining enhancement: pipeline AUTO-DETECTION** (read a model's latent channels
-— 48→ti2v, 36→i2v, 16→t2v — from its file header, needs model-root config + GGUF header parsing) so
-the pipeline need not be picked by hand. Capability-wise every runnable model already works via manual
-pipeline selection; auto-detection is convenience.
+12 GB. **Pipeline AUTO-DETECTION LANDED (ADR-0023), verified.** `src/model-arch.ts` reads a model's
+`patch_embedding` in_channels from the file header (safetensors `shape[1]`; GGUF dims `[-2]`, city96
+ComfyUI-GGUF) → 48/36/16 → pipeline. New `GET /detect-pipeline?model=<name>` (gated, never-throws)
+returns `{pipeline, channels}` or `{pipeline:null}`; config gains `comfyui.diffusionModelDirs` (the
+local `diffusion_models/` roots — empty ⇒ off, manual selection). UI: picking a model calls the
+endpoint and pre-selects the matching pipeline (visible note, overridable). Verified end-to-end on the
+real files (wan2.2_ti2v_5B→48/ti2v, lightx2v→36/i2v, rapidWAN T2V→16/t2v). `config.json` was updated
+locally to enable it (its two model dirs; gitignored so paths don't leak). Tests: 192 pass (+8 in
+`test/model-arch.test.ts`, real safetensors/GGUF fixtures + endpoint), tsc clean.
+
+**IMPORTANT merge state:** master (c517a8c) only has ADR-0021 discovery + the scrub. ADR-0022
+Phases 0/1/2 AND ADR-0023 are on branch `feat/discover-video-models` (PR #45 already merged at an
+earlier commit) and need a NEW PR to reach master.
 
 ### Prior — Video-model subfolder reconciliation (ADR-0020)
 **Video-model subfolder reconciliation (ADR-0020, branch
