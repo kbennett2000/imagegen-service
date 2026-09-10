@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { reconcileCheckpoint } from "./checkpoints.js";
+import { reconcileCheckpoint, modelInstalled, reconcileModelName } from "./checkpoints.js";
 import { ensureTrigger, lookupStyleLora, type StyleLora } from "./style-loras.js";
 import {
   getVideoModel,
@@ -400,7 +400,8 @@ export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[
 // Which of a video model's required files are NOT advertised by ComfyUI (ADR-0015). [] => all present
 // and animation can run; a non-empty list is exactly what to fetch. Each file names the object_info
 // loader + combo to probe; results keep the spec's file order. All files read missing when ComfyUI is
-// unreachable (each probe returns []).
+// unreachable (each probe returns []). Presence is matched by BASENAME (ADR-0020) so a subfoldered
+// install ("s/wan….safetensors") still counts as present, mirroring the checkpoint path (ADR-0019).
 export async function videoModelsMissing(
   base: string,
   fetchFn: FetchFn,
@@ -409,7 +410,7 @@ export async function videoModelsMissing(
   const checks = await Promise.all(
     files.map(async (f) => ({
       f,
-      present: (await objectInfoOptions(base, fetchFn, f.loaderClass, f.inputName)).includes(f.file),
+      present: modelInstalled(f.file, await objectInfoOptions(base, fetchFn, f.loaderClass, f.inputName)),
     })),
   );
   return checks.filter((c) => !c.present).map((c) => `${c.f.subdir}/${c.f.file}`);
@@ -812,6 +813,19 @@ export async function animateImage(
       fps: params.fps,
       imageName,
     });
+
+    // Reconcile each model-file input against ComfyUI's live list so a subfoldered install
+    // ("s/wan….safetensors") loads by its exact prefixed name (ADR-0020). The renderers stay pure
+    // and emit bare names; the prefix is recovered here, mirroring generateImage's ckpt reconcile.
+    // A truly-absent file is left unchanged, so ComfyUI still returns its own clean "not found".
+    for (const f of spec.files) {
+      const options = await objectInfoOptions(base, fetchFn, f.loaderClass, f.inputName);
+      for (const node of Object.values(graph)) {
+        if (node.class_type === f.loaderClass && typeof node.inputs[f.inputName] === "string") {
+          node.inputs[f.inputName] = reconcileModelName(String(node.inputs[f.inputName]), options);
+        }
+      }
+    }
 
     const clientId = `imagegen-${randomSeed().toString(16)}`;
     const res = await fetchFn(`${base}/prompt`, {

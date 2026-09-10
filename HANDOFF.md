@@ -1,6 +1,23 @@
 # Handoff
 
 ## Current state
+**Video-model subfolder reconciliation (ADR-0020, branch
+`feat/video-model-subfolder-reconciliation`, PR open for review).** Extends ADR-0019's basename
+reconciliation from the checkpoint path to the video path so the *supported* video models (`wan-5b`,
+`ltxv`) are recognized and load from either drive and from `s/`/`ns/` subfolders — matching the image
+experience. Before this, `videoModelsMissing` matched by exact filename and the workflow renderers
+injected bare names, so a Wan/LTX file in a subfolder read "not installed" and failed to load.
+Fix: `src/checkpoints.ts` exposes generic aliases (`modelBasename`/`modelInstalled`/
+`reconcileModelName`) of the ADR-0019 helpers; `videoModelsMissing` tests presence by basename;
+`animateImage` reconciles every loader node's file input against ComfyUI's live `object_info` list
+after rendering (renderers stay pure). No API/dropdown/renderer-signature change. Tests: 174 pass
+(+4 subfolder cases in `test/animate.test.ts`), tsc clean. **Not solved by this (out of scope):** the
+video Model dropdown is a fixed registry of supported models, not a file scan — an arbitrary/new
+video model still needs a workflow + registry entry in code. And a drive is only indexed by ComfyUI
+if it was mounted when ComfyUI started (restart ComfyUI after adding files) — operational, per
+ADR-0017.
+
+### Prior — Checkpoint subfolder groups (ADR-0019)
 **Checkpoint subfolder groups + basename reconciliation (ADR-0019, branch
 `feat/checkpoint-subfolder-groups`, PR open for review).** ComfyUI lists checkpoints relative to each
 configured root, so a subfoldered model reads as `s/foo.safetensors` while the catalog and workflow
