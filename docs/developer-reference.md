@@ -354,7 +354,7 @@ case-insensitively. `noir` and `ghibli` are intentionally prompt-only (no reliab
 
 ### `GET /checkpoints`
 
-Lists the curated SFW base-model catalog. Each entry is `{ name, file, description, installed }`,
+Lists the curated base-model catalog. Each entry is `{ name, file, description, installed }`,
 where `installed` reflects whether the file is actually loaded on the fronted ComfyUI. Pass a `name`
 in `/generate`'s `checkpoint` field (or the exact `file`). Gated by the token when auth is enabled.
 
@@ -372,7 +372,7 @@ curl http://localhost:8189/checkpoints
 
 The 10 catalog names are `realvisxl`, `juggernaut`, `animagine`, `zavychroma` (ADR-0014, ungated HF),
 plus `dreamshaper`, `realcartoon`, `nightvision`, `colorful`, `samaritan3d`, `starlight` (ADR-0016,
-from Civitai) — all full SFW SDXL checkpoints. The files are downloaded by the installer (see
+from Civitai) — all full SDXL checkpoints. The files are downloaded by the installer (see
 [`install/models.manifest`](../install/models.manifest)); a catalog entry with `installed: false`
 just hasn't been downloaded on this box yet (the Civitai ones need the API key — see
 [Downloading models](#downloading-models-civitai-api-key)).

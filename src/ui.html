@@ -450,7 +450,7 @@
       }
       if (missing.indexOf("diffusion-model") !== -1) {
         animStatus.textContent = "No image-to-video model installed — add a .safetensors or .gguf to " +
-          "ComfyUI's models/diffusion_models/ (an s/ or ns/ subfolder is fine), then restart ComfyUI.";
+          "ComfyUI's models/diffusion_models/ (a subfolder is fine), then restart ComfyUI.";
         return;
       }
       animStatus.textContent = "Video support incomplete — run scripts/fetch-wan22-models.ts, then " +
@@ -459,7 +459,7 @@
 
     // Build the video Model picker from the live-discovered diffusion models (ADR-0021), grouped by
     // subfolder like the checkpoint picker. The option VALUE is the exact ComfyUI name (with any
-    // s//ns/ prefix), sent as `diffusionModel`; the label shows the clean basename. Nothing is
+    // subfolder prefix), sent as `diffusionModel`; the label shows the clean basename. Nothing is
     // hardcoded — the whole list comes from /health, so no model name lives in this client.
     function populateAnimModels(models) {
       const sel = $("animModel");
@@ -547,7 +547,7 @@
       const frag = document.createDocumentFragment();
       if (installed.length) {
         // Group installed checkpoints by their subfolder so a split models dir reads as sections.
-        // ComfyUI reports each name relative to its root, so "s/foo.safetensors" groups under "s"
+        // ComfyUI reports each name relative to its root, so "sub/foo.safetensors" groups under "sub"
         // showing just "foo.safetensors"; a bare name groups under "Installed" (ADR-0019). The
         // option VALUE stays the full name ComfyUI reported (that's what /generate needs).
         const groups = new Map(); // folder label -> [full names], in first-seen order

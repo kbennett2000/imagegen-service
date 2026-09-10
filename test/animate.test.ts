@@ -104,9 +104,9 @@ test("wanModelsMissing: [] when all present, lists the absent files otherwise", 
 
 test("wanModelsMissing: subfoldered (s/, ns/) installs still read present (basename match)", async () => {
   const sub = new MockComfy({
-    wanUnets: ["s/wan2.2_ti2v_5B_fp16.safetensors"],
-    wanClips: ["ns/umt5_xxl_fp8_e4m3fn_scaled.safetensors"],
-    wanVaes: ["s/wan2.2_vae.safetensors"],
+    wanUnets: ["sub/wan2.2_ti2v_5B_fp16.safetensors"],
+    wanClips: ["sub/umt5_xxl_fp8_e4m3fn_scaled.safetensors"],
+    wanVaes: ["sub/wan2.2_vae.safetensors"],
   });
   assert.deepEqual(await wanModelsMissing(URL, sub.fetch), []);
 });
@@ -114,17 +114,17 @@ test("wanModelsMissing: subfoldered (s/, ns/) installs still read present (basen
 test("animateImage: subfoldered model files load by their exact prefixed name (ADR-0020)", async () => {
   const mock = new MockComfy({
     outputFilename: (pid) => `${pid}.mp4`,
-    wanUnets: ["s/wan2.2_ti2v_5B_fp16.safetensors"],
-    wanClips: ["ns/umt5_xxl_fp8_e4m3fn_scaled.safetensors"],
-    wanVaes: ["s/wan2.2_vae.safetensors"],
+    wanUnets: ["sub/wan2.2_ti2v_5B_fp16.safetensors"],
+    wanClips: ["sub/umt5_xxl_fp8_e4m3fn_scaled.safetensors"],
+    wanVaes: ["sub/wan2.2_vae.safetensors"],
   });
   const result = await animateImage(URL, { prompt: "p", image: B64_STILL }, mock.fetch);
   assert.equal(result.ok, true); // preflight passes by basename, nothing "not installed"
   // The submitted graph asks ComfyUI for the exact prefixed names it advertises, not the bare ones.
   const graph = mock.submitted[0]!.graph;
-  assert.equal(graph["37"].inputs.unet_name, "s/wan2.2_ti2v_5B_fp16.safetensors");
-  assert.equal(graph["38"].inputs.clip_name, "ns/umt5_xxl_fp8_e4m3fn_scaled.safetensors");
-  assert.equal(graph["39"].inputs.vae_name, "s/wan2.2_vae.safetensors");
+  assert.equal(graph["37"].inputs.unet_name, "sub/wan2.2_ti2v_5B_fp16.safetensors");
+  assert.equal(graph["38"].inputs.clip_name, "sub/umt5_xxl_fp8_e4m3fn_scaled.safetensors");
+  assert.equal(graph["39"].inputs.vae_name, "sub/wan2.2_vae.safetensors");
 });
 
 test("animateImage: flat (unprefixed) installs are still injected verbatim", async () => {
@@ -142,43 +142,43 @@ test("animateImage: flat (unprefixed) installs are still injected verbatim", asy
 test("animateImage: the requested diffusion model is used; absent field falls back to the first", async () => {
   const opts = {
     outputFilename: (pid: string) => `${pid}.mp4`,
-    wanUnets: ["s/video-model-a.safetensors", "s/video-model-b.safetensors"],
+    wanUnets: ["sub/video-model-a.safetensors", "alt/video-model-b.safetensors"],
   };
   const mockPick = new MockComfy(opts);
   const picked = await animateImage(
     URL,
-    { prompt: "p", image: B64_STILL, diffusionModel: "s/video-model-b.safetensors" },
+    { prompt: "p", image: B64_STILL, diffusionModel: "alt/video-model-b.safetensors" },
     mockPick.fetch,
   );
   assert.equal(picked.ok, true);
-  assert.equal(mockPick.submitted[0]!.graph["37"].inputs.unet_name, "s/video-model-b.safetensors");
+  assert.equal(mockPick.submitted[0]!.graph["37"].inputs.unet_name, "alt/video-model-b.safetensors");
   assert.equal(mockPick.submitted[0]!.graph["37"].class_type, "UNETLoader");
 
   const mockDefault = new MockComfy(opts);
   await animateImage(URL, { prompt: "p", image: B64_STILL }, mockDefault.fetch); // no diffusionModel
-  assert.equal(mockDefault.submitted[0]!.graph["37"].inputs.unet_name, "s/video-model-a.safetensors");
+  assert.equal(mockDefault.submitted[0]!.graph["37"].inputs.unet_name, "sub/video-model-a.safetensors");
 });
 
 test("animateImage: a .gguf model loads through UnetLoaderGGUF (ADR-0021)", async () => {
   const mock = new MockComfy({
     outputFilename: (pid) => `${pid}.mp4`,
     wanUnets: [], // no plain safetensors diffusion model
-    wanGgufUnets: ["ns/video-model-a.gguf"],
+    wanGgufUnets: ["sub/video-model-a.gguf"],
   });
   const result = await animateImage(
     URL,
-    { prompt: "p", image: B64_STILL, diffusionModel: "ns/video-model-a.gguf" },
+    { prompt: "p", image: B64_STILL, diffusionModel: "sub/video-model-a.gguf" },
     mock.fetch,
   );
   assert.equal(result.ok, true);
   const node = mock.submitted[0]!.graph["37"];
   assert.equal(node.class_type, "UnetLoaderGGUF");
-  assert.equal(node.inputs.unet_name, "ns/video-model-a.gguf");
+  assert.equal(node.inputs.unet_name, "sub/video-model-a.gguf");
   assert.equal(node.inputs.weight_dtype, undefined); // the GGUF loader takes only unet_name
 });
 
 test("animateImage: a requested model that isn't installed -> clean error, nothing submitted", async () => {
-  const mock = new MockComfy({ wanUnets: ["s/video-model-a.safetensors"] });
+  const mock = new MockComfy({ wanUnets: ["sub/video-model-a.safetensors"] });
   const r = (await animateImage(
     URL,
     { prompt: "p", image: B64_STILL, diffusionModel: "not-there.safetensors" },
@@ -191,13 +191,13 @@ test("animateImage: a requested model that isn't installed -> clean error, nothi
 
 test("GET /health lists installed video models (safetensors + gguf) with nothing hardcoded", async () => {
   const mock = new MockComfy({
-    wanUnets: ["s/video-model-a.safetensors"],
-    wanGgufUnets: ["ns/video-model-b.gguf"],
+    wanUnets: ["sub/video-model-a.safetensors"],
+    wanGgufUnets: ["alt/video-model-b.gguf"],
   });
   const svc = await startService(mock);
   try {
     const body = (await (await fetch(`${svc.base}/health`)).json()) as any;
-    assert.deepEqual(body.videoModels, ["s/video-model-a.safetensors", "ns/video-model-b.gguf"]);
+    assert.deepEqual(body.videoModels, ["sub/video-model-a.safetensors", "alt/video-model-b.gguf"]);
     assert.equal(body.wan.ready, true);
   } finally {
     await svc.close();
@@ -369,14 +369,14 @@ test("animateImage: model=ltxv with its files missing -> clean error naming the 
 test("animateImage: model=ltxv also tolerates subfoldered files (ADR-0020)", async () => {
   const mock = new MockComfy({
     outputFilename: (pid) => `${pid}.mp4`,
-    checkpoints: ["s/ltx-video-2b-v0.9.5.safetensors"],
-    wanClips: ["ns/t5xxl_fp8_e4m3fn_scaled.safetensors"],
+    checkpoints: ["sub/ltx-video-2b-v0.9.5.safetensors"],
+    wanClips: ["sub/t5xxl_fp8_e4m3fn_scaled.safetensors"],
   });
   const result = await animateImage(URL, { prompt: "p", image: B64_STILL, model: "ltxv" }, mock.fetch);
   assert.equal(result.ok, true);
   const graph = mock.submitted[0]!.graph;
-  assert.equal(graph["44"].inputs.ckpt_name, "s/ltx-video-2b-v0.9.5.safetensors");
-  assert.equal(graph["38"].inputs.clip_name, "ns/t5xxl_fp8_e4m3fn_scaled.safetensors");
+  assert.equal(graph["44"].inputs.ckpt_name, "sub/ltx-video-2b-v0.9.5.safetensors");
+  assert.equal(graph["38"].inputs.clip_name, "sub/t5xxl_fp8_e4m3fn_scaled.safetensors");
 });
 
 test("POST /animate: model=ltxv -> 200 video/mp4", async () => {

@@ -105,7 +105,7 @@ export interface AnimateParams {
   // unaffected. The server validates this against ANIMATE_MODELS before it reaches here.
   model?: AnimateModel;
   // The image-to-video diffusion model to animate with, as the exact name ComfyUI advertises
-  // (discovered via /health, may carry an s//ns/ prefix) — ADR-0021. Omitted => the first installed
+  // (discovered via /health, may carry a subfolder prefix) — ADR-0021. Omitted => the first installed
   // one. Only consulted on the default (Wan) path; ignored for a legacy `model` id like ltxv.
   diffusionModel?: string;
 }
@@ -409,7 +409,7 @@ export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[
 // and animation can run; a non-empty list is exactly what to fetch. Each file names the object_info
 // loader + combo to probe; results keep the spec's file order. All files read missing when ComfyUI is
 // unreachable (each probe returns []). Presence is matched by BASENAME (ADR-0020) so a subfoldered
-// install ("s/wan….safetensors") still counts as present, mirroring the checkpoint path (ADR-0019).
+// install ("sub/wan….safetensors") still counts as present, mirroring the checkpoint path (ADR-0019).
 export async function videoModelsMissing(
   base: string,
   fetchFn: FetchFn,
@@ -431,7 +431,7 @@ export async function wanModelsMissing(base: string, fetchFn: FetchFn): Promise<
 }
 
 export interface DiffusionModel {
-  name: string; // exact ComfyUI name, with any s//ns/ subfolder prefix
+  name: string; // exact ComfyUI name, with any subfolder prefix
   loaderClass: string; // "UNETLoader" (.safetensors) or "UnetLoaderGGUF" (.gguf)
 }
 
@@ -631,7 +631,7 @@ export async function generateImage(
     setNodeSize(graph, "5", params.width, params.height); // EmptyLatentImage (both workflows)
     setNodeCheckpoint(graph, "4", params.checkpoint); // base checkpoint override (both workflows)
     // Reconcile every checkpoint node against what ComfyUI actually reports, so a subfoldered install
-    // (e.g. "s/sd_xl_base_1.0.safetensors") is matched by basename and the exact ckpt_name is injected
+    // (e.g. "sub/sd_xl_base_1.0.safetensors") is matched by basename and the exact ckpt_name is injected
     // — for the base node "4" (override or template default) and the refiner node "11" alike. Best
     // effort: if the list can't be fetched, leave each ckpt_name as-is and let ComfyUI report (ADR-0019).
     let availableCheckpoints: string[] = [];
@@ -946,7 +946,7 @@ export async function animateImage(
     const graph = plan.render(imageName);
 
     // Reconcile each model-file input against ComfyUI's live list so a subfoldered install
-    // ("s/foo.safetensors") loads by its exact prefixed name (ADR-0020). The renderers stay pure and
+    // ("sub/foo.safetensors") loads by its exact prefixed name (ADR-0020). The renderers stay pure and
     // emit bare names; the prefix is recovered here, mirroring generateImage's ckpt reconcile. A
     // truly-absent file is left unchanged, so ComfyUI still returns its own clean "not found". (The
     // diffusion loader on the Wan path is already set to the exact discovered name by the plan.)

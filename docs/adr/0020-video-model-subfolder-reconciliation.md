@@ -8,8 +8,7 @@ Accepted
 
 ADR-0019 taught the **image** path to tolerate subfoldered checkpoints: ComfyUI lists each model
 file relative to whichever configured root it was found under, so the same file reads as
-`foo.safetensors` at a root and `s/foo.safetensors` in a subfolder of one (most naturally an `s/`
-(SFW) / `ns/` (NSFW) split on a drive — ADR-0017). Checkpoints now reconcile bare
+`foo.safetensors` at a root and `sub/foo.safetensors` in a subfolder of one (most naturally a named subfolder on a drive — ADR-0017). Checkpoints now reconcile bare
 catalog/template names against ComfyUI's reported names **by basename**, so a subfoldered install
 still reads installed and still loads.
 
@@ -17,7 +16,7 @@ The **video** path (ADR-0009 Wan 2.2, generalized to a registry in ADR-0015) nev
 model files are referenced by **bare** filename in two places:
 
 1. **Preflight** — `videoModelsMissing` (`src/engine.ts`) tests presence with exact string equality
-   (`options.includes(f.file)`), so a file ComfyUI reports as `s/wan2.2_ti2v_5B_fp16.safetensors`
+   (`options.includes(f.file)`), so a file ComfyUI reports as `sub/wan2.2_ti2v_5B_fp16.safetensors`
    reads as **not installed** even though it is present.
 2. **Injection** — the per-model workflow renderers (`renderWanWorkflow`, `renderLtxvWorkflow`) bake
    the bare filename into the loader nodes (`UNETLoader.unet_name`, `CLIPLoader.clip_name`,
@@ -27,7 +26,7 @@ model files are referenced by **bare** filename in two places:
 Concretely: a Wan file at a `diffusion_models` root works, but move it into `diffusion_models/s/`
 (the same organization the checkpoint side supports) and `/animate` reports "model files not
 installed" and `/health` reads `wan.ready: false`. The user's goal is symmetry with image models:
-keep video models on either drive and in `s/`/`ns/` subfolders, and have the *supported* models
+keep video models on either drive and in subfolders, and have the *supported* models
 still be recognized and loadable.
 
 Scope note — this is about the **supported** models (the registry in `src/video-models.ts`:
@@ -49,7 +48,7 @@ video code referenced bare names.
   the actionable message is unchanged.
 - **`animateImage`**, after rendering the graph, reconciles every loader node whose
   `class_type`/input matches a spec file against ComfyUI's live `object_info` list, rewriting the
-  input to the exact name ComfyUI advertises (recovering an `s/` prefix) — mirroring how
+  input to the exact name ComfyUI advertises (recovering a subfolder prefix) — mirroring how
   `generateImage` already reconciles `CheckpointLoaderSimple` nodes (ADR-0019). A truly absent file
   is left unchanged so ComfyUI still returns its own clean "not found".
 
@@ -59,7 +58,7 @@ in the engine where the live list is available, exactly as on the image path.
 ## Consequences
 
 - The supported video models (`wan-5b`, `ltxv`) are recognized and load from either drive and from
-  `s/`/`ns/` subfolders, matching the checkpoint experience. Flat layouts keep working (exact match
+  subfolders, matching the checkpoint experience. Flat layouts keep working (exact match
   wins before basename fallback).
 - No change to the `/animate` API, the dropdown (still the fixed registry), or the renderers'
   signatures. Reconciliation adds a few best-effort `object_info` probes per animate request against

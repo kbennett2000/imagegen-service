@@ -99,7 +99,7 @@ Generate a plain, realistic picture, or pick one of **33 art styles** to give it
 | vaporwave | Retro-neon | | low-poly | PS1-era 3D |
 
 You can also **describe a style in your own words** (like "noir" or "ghibli") and it'll do its best,
-or **pick a different base model** entirely — the service ships a small catalog of SFW SDXL
+or **pick a different base model** entirely — the service ships a small catalog of SDXL
 checkpoints (photoreal, anime, cinematic) selectable per request; see the
 [developer reference](docs/developer-reference.md). There's even a way to feed it a **reference
 photo** so a character keeps the same face across scenes — see
@@ -145,7 +145,7 @@ npm run test:unit  # CI-safe; mocks ComfyUI, no GPU needed
 ## Experimental: animate an image
 
 Turn a still into a short video, served by **`POST /animate`** (still image + prompt in → mp4 out),
-through the same ComfyUI instance. Two SFW models are available via the `model` field
+through the same ComfyUI instance. Two models are available via the `model` field
 (ADR-[0008](docs/adr/0008-image-to-video-wan22.md)/[0009](docs/adr/0009-animate-endpoint.md)/[0015](docs/adr/0015-multi-model-video-dispatch.md)):
 
 - **`wan-5b`** (default) — [Wan 2.2 TI2V 5B](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged), higher-fidelity, ~18 GB of files (`scripts/fetch-wan22-models.ts`).

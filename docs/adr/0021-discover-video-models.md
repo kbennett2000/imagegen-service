@@ -12,7 +12,7 @@ Two problems followed:
 
 1. **A model the user installs never appears.** The test-UI video dropdown was two literal `<option>`
    tags. Dropping a new image-to-video model into ComfyUI's `models/diffusion_models/` (including in
-   an `s/`/`ns/` subfolder, per ADR-0017/0019) could never surface it — the service only knew the
+   an a subfolder, per ADR-0017/0019) could never surface it — the service only knew the
    names compiled into it.
 2. **Model filenames live in the repo.** Adding a model meant committing its filename. That is
    unacceptable for private/experimental models: the repo must never contain a model name that hints
@@ -33,12 +33,12 @@ Select the video diffusion model **from ComfyUI's live inventory**, never from a
 
 - **Discovery** — `listDiffusionModels(base, fetchFn)` (engine) returns every installed diffusion
   model as `{ name, loaderClass }`, unioning `UNETLoader` and `UnetLoaderGGUF`. Names are whatever
-  ComfyUI reports (with any `s/`/`ns/` prefix), read at request time and never persisted.
+  ComfyUI reports (with any a subfolder prefix), read at request time and never persisted.
 - **Dropdown** — `GET /health` gains `videoModels` (the discovered names). The UI builds the video
   Model picker from it, grouped by subfolder and showing clean basenames — mirroring the checkpoint
   picker (ADR-0019). No `<option>` is hardcoded.
 - **Selection** — `POST /animate` accepts `diffusionModel` (the exact ComfyUI name; path-safety
-  validated, the `s/`/`ns/` prefix allowed). Absent → the engine uses the first discovered model, so
+  validated, the a subfolder prefix allowed). Absent → the engine uses the first discovered model, so
   a single-model host needs no field. `model` is still accepted for the legacy registry path
   (e.g. LTX-Video), unchanged.
 - **Loader by format** — `animateImage` renders the Wan i2v graph, then sets the diffusion-loader
@@ -52,8 +52,8 @@ Select the video diffusion model **from ComfyUI's live inventory**, never from a
 
 ## Consequences
 
-- Any installed image-to-video model — `.safetensors` or `.gguf`, on either drive, in `s/`/`ns/`
-  subfolders — shows up in the dropdown and animates, with nothing about it committed to the repo.
+- Any installed image-to-video model — `.safetensors` or `.gguf`, on either drive, in any named
+  subfolder — shows up in the dropdown and animates, with nothing about it committed to the repo.
 - The `wan-5b` registry entry's diffusion filename is no longer authoritative for the default path
   (kept only for the smoke script / back-compat); the Wan path is always dynamic.
 - A few extra best-effort `/object_info` probes per animate + health request against the local
