@@ -136,6 +136,50 @@ test("animateImage: flat (unprefixed) installs are still injected verbatim", asy
   assert.equal(graph["39"].inputs.vae_name, "wan2.2_vae.safetensors");
 });
 
+// ---- Wan 2.1 i2v pipeline (ADR-0022 Phase 1) ---------------------------------------------
+
+test("animateImage: pipeline=wan21-i2v renders the Wan 2.1 i2v graph (WanImageToVideo + clip-vision)", async () => {
+  const mock = new MockComfy({
+    outputFilename: (pid) => `${pid}.mp4`,
+    wanUnets: [],
+    wanGgufUnets: ["sub/video-model-a.gguf"],
+  });
+  const r = await animateImage(
+    URL,
+    { prompt: "come alive", image: B64_STILL, pipeline: "wan21-i2v", steps: 4, cfg: 1 },
+    mock.fetch,
+  );
+  assert.equal(r.ok, true);
+  const g = mock.submitted[0]!.graph;
+  // GGUF model wired through UnetLoaderGGUF; the i2v-specific nodes are present.
+  assert.equal(g["37"].class_type, "UnetLoaderGGUF");
+  assert.equal(g["37"].inputs.unet_name, "sub/video-model-a.gguf");
+  assert.equal(g["55"].class_type, "WanImageToVideo");
+  assert.equal(g["40b"].class_type, "CLIPVisionEncode");
+  assert.equal(g["39"].inputs.vae_name, "wan_2.1_vae.safetensors"); // 16-ch VAE, not the 2.2 one
+  // Distilled-model sampler overrides flow through.
+  assert.equal(g["3"].inputs.steps, 4);
+  assert.equal(g["3"].inputs.cfg, 1);
+  // The uploaded still feeds both the i2v latent builder and the clip-vision encoder.
+  assert.equal(g["52"].inputs.image, mock.uploads[0]);
+});
+
+test("animateImage: pipeline=wan21-i2v with CLIP-vision missing -> clean, actionable error", async () => {
+  const mock = new MockComfy({
+    wanUnets: [],
+    wanGgufUnets: ["sub/video-model-a.gguf"],
+    clipVision: [], // no CLIP-vision installed
+  });
+  const r = (await animateImage(
+    URL,
+    { prompt: "p", image: B64_STILL, pipeline: "wan21-i2v" },
+    mock.fetch,
+  )) as { ok: false; error: string };
+  assert.equal(r.ok, false);
+  assert.match(r.error, /Wan 2\.1 i2v support files not installed/);
+  assert.equal(mock.submitted.length, 0);
+});
+
 // ---- architecture-incompatibility error translation (ADR-0022) ---------------------------
 
 test("formatVideoExecutionError: a tensor-size mismatch reads as an architecture message", () => {

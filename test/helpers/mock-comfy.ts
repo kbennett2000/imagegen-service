@@ -33,6 +33,9 @@ export interface MockOptions {
   // GGUF diffusion models advertised via the ComfyUI-GGUF node's UnetLoaderGGUF.unet_name (ADR-0021).
   // Undefined => the node is absent (404), like a host without ComfyUI-GGUF installed.
   wanGgufUnets?: string[];
+  // CLIP-vision models advertised by CLIPVisionLoader.clip_name (Wan 2.1 i2v, ADR-0022). Default: the
+  // CLIP-ViT-H model. Set to [] to simulate it being absent (drives the wan21-i2v preflight error).
+  clipVision?: string[];
   // Simulate ComfyUI being down: every request rejects (network error).
   down?: boolean;
   // Make POST /prompt fail with this HTTP status (e.g. 400/500). Default: succeeds.
@@ -96,7 +99,9 @@ const DEFAULT_WAN_CLIPS = [
   "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
   "t5xxl_fp8_e4m3fn_scaled.safetensors", // LTX-Video T5 text encoder (drives the ltxv preflight)
 ];
-const DEFAULT_WAN_VAES = ["wan2.2_vae.safetensors", "sdxl_vae.safetensors"];
+const DEFAULT_WAN_VAES = ["wan2.2_vae.safetensors", "wan_2.1_vae.safetensors", "sdxl_vae.safetensors"];
+// CLIP-vision models for the Wan 2.1 i2v pipeline (ADR-0022). Default: the CLIP-ViT-H Wan uses.
+const DEFAULT_CLIP_VISION = ["CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"];
 
 // Optional node classes a stock ComfyUI + IPAdapter_plus install provides.
 const DEFAULT_NODES = ["PrepImageForClipVision"];
@@ -197,6 +202,14 @@ export class MockComfy {
         const vaes = this.opts.wanVaes ?? DEFAULT_WAN_VAES;
         return this.jsonResponse(200, {
           VAELoader: { input: { required: { vae_name: [vaes] } } },
+        });
+      }
+
+      // GET /object_info/CLIPVisionLoader — advertises CLIP-vision models (Wan 2.1 i2v, ADR-0022).
+      if (method === "GET" && path.startsWith("/object_info/CLIPVisionLoader")) {
+        const cv = this.opts.clipVision ?? DEFAULT_CLIP_VISION;
+        return this.jsonResponse(200, {
+          CLIPVisionLoader: { input: { required: { clip_name: [cv] } } },
         });
       }
 

@@ -233,12 +233,33 @@
         </div>
       </div>
 
+      <label for="animPipeline">Pipeline <span class="hint">(which workflow drives the model)</span></label>
+      <select id="animPipeline">
+        <option value="wan22-ti2v" selected>Wan 2.2 TI2V (48-channel, image or text → video)</option>
+        <option value="wan21-i2v">Wan 2.1 I2V (16-channel, image → video)</option>
+      </select>
+      <p class="hint" style="margin:.3rem 0 0">
+        Each video model is built for one architecture — pick the pipeline that matches. A model run
+        through the wrong pipeline reports as incompatible. Wan 2.2 TI2V 5B → the first option; Wan 2.1
+        image-to-video models (incl. GGUF fast models) → the second.
+      </p>
+
       <label for="animModel">Model <span class="hint">(installed image-to-video models)</span></label>
       <select id="animModel"><option value="">(loading…)</option></select>
-      <p class="hint" style="margin:.3rem 0 0">
-        The built-in workflow drives <strong>Wan 2.2 TI2V 5B</strong> (48-channel) models. Other
-        architectures (Wan 2.1 I2V, T2V, Hunyuan…) will report as incompatible until the service adds
-        their workflow.
+
+      <div class="row" id="animSamplerRow" hidden>
+        <div>
+          <label for="animSteps">Steps <span class="hint">(blank = default)</span></label>
+          <input id="animSteps" type="number" step="1" min="1" max="100" placeholder="20" />
+        </div>
+        <div>
+          <label for="animCfg">CFG <span class="hint">(distilled = 1)</span></label>
+          <input id="animCfg" type="number" step="0.5" min="0" max="30" placeholder="6" />
+        </div>
+      </div>
+      <p class="hint" style="margin:.3rem 0 0" id="animSamplerHint" hidden>
+        Distilled Wan 2.1 models (lightx2v 4-step, rapid) need <strong>Steps 4</strong> and
+        <strong>CFG 1</strong>. Full models use ~20 steps / CFG 6.
       </p>
 
       <label for="animPrompt">Prompt <span class="hint">(required — how it should move)</span></label>
@@ -981,6 +1002,15 @@
       }
     }
 
+    // Show the Steps/CFG overrides only for the Wan 2.1 i2v pipeline (distilled models need them).
+    function syncPipelineUi() {
+      const wan21 = $("animPipeline").value === "wan21-i2v";
+      $("animSamplerRow").hidden = !wan21;
+      $("animSamplerHint").hidden = !wan21;
+    }
+    $("animPipeline").addEventListener("change", syncPipelineUi);
+    syncPipelineUi();
+
     $("animForm").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       clearAnimError();
@@ -992,6 +1022,12 @@
       const body = { image: animImageB64, prompt: prompt };
       const diffusionModel = $("animModel").value;
       if (diffusionModel) body.diffusionModel = diffusionModel;
+      const pipeline = $("animPipeline").value;
+      if (pipeline && pipeline !== "wan22-ti2v") body.pipeline = pipeline;
+      const stepsRaw = $("animSteps").value.trim();
+      if (stepsRaw !== "") body.steps = Number(stepsRaw);
+      const cfgRaw = $("animCfg").value.trim();
+      if (cfgRaw !== "") body.cfg = Number(cfgRaw);
       const neg = $("animNegative").value.trim();
       if (neg) body.negativePrompt = neg;
       const framesRaw = $("animFrames").value.trim();

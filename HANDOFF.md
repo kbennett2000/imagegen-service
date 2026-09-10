@@ -31,7 +31,19 @@ on a 12 GB card 14B fp16 models don't fit (GGUF-Q4/fp8 only). **Phase 0 landed h
 workflow the service doesn't have yet" message (test added); UI notes the Wan 2.2 TI2V support
 boundary. **Roadmap (ADR-0022, each phase GPU-verified):** (1) workflow registry + architecture
 detection/routing + Wan 2.1 I2V (GGUF-first, fits 12 GB, unlocks the most models); (2) Wan T2V;
-(3) Hunyuan/SkyReels. Not yet built.
+(3) Hunyuan/SkyReels.
+
+**Phase 1 LANDED (Wan 2.1 I2V), GPU-verified.** New `src/workflows/wan21-i2v.json` +
+`src/wan21-workflow.ts` renderer (16-ch `wan_2.1_vae`, umt5, CLIP-ViT-H vision → `WanImageToVideo`).
+Routing is by an explicit **`pipeline`** field on `/animate` (`wan22-ti2v` default, `wan21-i2v`) —
+robust, no fragile header/GGUF auto-detection (deferred). `AnimateParams` gains `pipeline`, `steps`,
+`cfg` (distilled models need low steps + cfg 1); engine `planAnimation` branches per pipeline, wires
+the diffusion loader by extension (`setDiffusionLoader`) and reconciles the pipeline's infra by role.
+UI: a Pipeline dropdown + Steps/CFG overrides shown only for `wan21-i2v`. Verified on the box by
+submitting the rendered graph to ComfyUI with `ns/lightx2v4stepGgufQ4KMWan21_i2v480P.gguf` (4 steps,
+cfg 1, 640×480×25): produced a valid 143 KB MP4, `node_errors: {}`. Tests: 181 pass (+ wan21 render +
+missing-clip-vision cases), tsc clean. **Next: Phase 2 (Wan T2V), then auto-detection so the pipeline
+need not be picked by hand.**
 
 ### Prior — Video-model subfolder reconciliation (ADR-0020)
 **Video-model subfolder reconciliation (ADR-0020, branch

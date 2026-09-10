@@ -13,6 +13,8 @@ import {
   generateImage,
   probeComfy,
   videoReadiness,
+  VIDEO_PIPELINES,
+  isVideoPipeline,
   QUALITIES,
   type AnimateParams,
   type FetchFn,
@@ -253,6 +255,20 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
     const err = modelNameError("diffusionModel", b.diffusionModel);
     if (err) return { error: err };
   }
+  // Workflow family (ADR-0022): which pipeline drives the chosen model.
+  if (b.pipeline !== undefined && !isVideoPipeline(b.pipeline)) {
+    return { error: `\`pipeline\` must be one of: ${VIDEO_PIPELINES.join(", ")}` };
+  }
+  // Sampler overrides (Wan 2.1 i2v distilled models): steps 1-100, cfg 0-30.
+  if (
+    b.steps !== undefined &&
+    (typeof b.steps !== "number" || !Number.isInteger(b.steps) || b.steps < 1 || b.steps > 100)
+  ) {
+    return { error: "`steps` must be an integer in [1, 100]" };
+  }
+  if (b.cfg !== undefined && (typeof b.cfg !== "number" || !Number.isFinite(b.cfg) || b.cfg < 0 || b.cfg > 30)) {
+    return { error: "`cfg` must be a number in [0, 30]" };
+  }
 
   const params: AnimateParams = { prompt: b.prompt, image: b.image };
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
@@ -265,6 +281,9 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   if (typeof b.diffusionModel === "string" && b.diffusionModel.trim() !== "") {
     params.diffusionModel = b.diffusionModel.trim();
   }
+  if (isVideoPipeline(b.pipeline)) params.pipeline = b.pipeline;
+  if (typeof b.steps === "number") params.steps = b.steps;
+  if (typeof b.cfg === "number") params.cfg = b.cfg;
   return { params };
 }
 

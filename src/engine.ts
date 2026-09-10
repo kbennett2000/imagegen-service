@@ -11,6 +11,12 @@ import { reconcileCheckpoint, modelBasename, modelInstalled, reconcileModelName 
 import { ensureTrigger, lookupStyleLora, type StyleLora } from "./style-loras.js";
 import { renderWanWorkflow, WAN_TEXT_ENCODER, WAN_VAE } from "./wan-workflow.js";
 import {
+  renderWan21I2vWorkflow,
+  WAN21_TEXT_ENCODER,
+  WAN21_VAE,
+  WAN21_CLIP_VISION,
+} from "./wan21-workflow.js";
+import {
   getVideoModel,
   DEFAULT_ANIMATE_MODEL,
   type AnimateModel,
@@ -108,6 +114,22 @@ export interface AnimateParams {
   // (discovered via /health, may carry a subfolder prefix) — ADR-0021. Omitted => the first installed
   // one. Only consulted on the default (Wan) path; ignored for a legacy `model` id like ltxv.
   diffusionModel?: string;
+  // Which workflow family drives the chosen model (ADR-0022). "wan22-ti2v" (default) is the built-in
+  // 48-channel Wan 2.2 TI2V path; "wan21-i2v" is the Wan 2.1 image-to-video pipeline (16-ch VAE +
+  // CLIP-vision). Different architectures need different graphs; the caller picks the matching one.
+  pipeline?: VideoPipeline;
+  // Sampler overrides for the Wan 2.1 i2v path — distilled models (lightx2v, rapid) need low steps
+  // and cfg 1. Ignored by the Wan 2.2 path (its template is fixed).
+  steps?: number;
+  cfg?: number;
+}
+
+// The workflow families the service can drive (ADR-0022). Add a family = add its template + a branch
+// in planAnimation + an entry here.
+export type VideoPipeline = "wan22-ti2v" | "wan21-i2v";
+export const VIDEO_PIPELINES: readonly VideoPipeline[] = ["wan22-ti2v", "wan21-i2v"];
+export function isVideoPipeline(v: unknown): v is VideoPipeline {
+  return typeof v === "string" && (VIDEO_PIPELINES as readonly string[]).includes(v);
 }
 
 export type AnimateResult =
@@ -456,6 +478,14 @@ export async function listDiffusionModels(base: string, fetchFn: FetchFn): Promi
 const WAN_INFRA_FILES: readonly VideoModelFile[] = [
   { loaderClass: "CLIPLoader", inputName: "clip_name", file: WAN_TEXT_ENCODER, subdir: "text_encoders" },
   { loaderClass: "VAELoader", inputName: "vae_name", file: WAN_VAE, subdir: "vae" },
+];
+
+// Wan 2.1 i2v shared infrastructure (ADR-0022, Phase 1): text encoder + 16-ch VAE + CLIP-vision. All
+// content-neutral; the diffusion model is discovered separately.
+const WAN21_INFRA_FILES: readonly VideoModelFile[] = [
+  { loaderClass: "CLIPLoader", inputName: "clip_name", file: WAN21_TEXT_ENCODER, subdir: "text_encoders" },
+  { loaderClass: "VAELoader", inputName: "vae_name", file: WAN21_VAE, subdir: "vae" },
+  { loaderClass: "CLIPVisionLoader", inputName: "clip_name", file: WAN21_CLIP_VISION, subdir: "clip_vision" },
 ];
 
 // /health video readiness (ADR-0021): the discovered diffusion models + what (if anything) blocks
@@ -888,7 +918,59 @@ async function planAnimation(
     };
   }
 
-  // Default: Wan image-to-video with a diffusion model from ComfyUI's live inventory.
+  // Pick the diffusion model from ComfyUI's live inventory (shared by every dynamic Wan pipeline).
+  const chosen = await chooseDiffusionModel(base, fetchFn, params.diffusionModel);
+  if ("ok" in chosen) return chosen;
+
+  // Wan 2.1 image-to-video pipeline (ADR-0022): a different architecture — 16-ch VAE + CLIP-vision.
+  if (params.pipeline === "wan21-i2v") {
+    const infraMissing = await videoModelsMissing(base, fetchFn, WAN21_INFRA_FILES);
+    if (infraMissing.length) {
+      return {
+        ok: false,
+        error: `Wan 2.1 i2v support files not installed on the ComfyUI host: ${infraMissing.join(", ")} — install the Wan 2.1 VAE, umt5 text encoder, and CLIP-vision, then restart ComfyUI`,
+      };
+    }
+    return {
+      files: WAN21_INFRA_FILES, // node 37 set explicitly below; infra nodes reconciled by role
+      render: (imageName) => {
+        const graph = renderWan21I2vWorkflow({
+          ...toRenderParams(params),
+          steps: params.steps,
+          cfg: params.cfg,
+          imageName,
+        }) as VideoGraph;
+        setDiffusionLoader(graph, chosen);
+        return graph;
+      },
+    };
+  }
+
+  // Default: Wan 2.2 TI2V (48-channel) — the built-in TI2V 5B pipeline.
+  const infraMissing = await videoModelsMissing(base, fetchFn, WAN_INFRA_FILES);
+  if (infraMissing.length) {
+    return {
+      ok: false,
+      error: `Wan text-encoder/VAE not installed on the ComfyUI host: ${infraMissing.join(", ")} — run scripts/fetch-wan22-models.ts, then restart ComfyUI`,
+    };
+  }
+  return {
+    files: WAN_INFRA_FILES,
+    render: (imageName) => {
+      const graph = renderWanWorkflow({ ...toRenderParams(params), imageName }) as VideoGraph;
+      setDiffusionLoader(graph, chosen);
+      return graph;
+    },
+  };
+}
+
+// Pick the diffusion model to animate with: the requested exact/basename name, else the first
+// installed. A clean { ok:false } (never naming a discovered model beyond echoing the request) if none.
+async function chooseDiffusionModel(
+  base: string,
+  fetchFn: FetchFn,
+  requestedRaw: string | undefined,
+): Promise<DiffusionModel | { ok: false; error: string }> {
   const installed = await listDiffusionModels(base, fetchFn);
   if (installed.length === 0) {
     return {
@@ -898,40 +980,29 @@ async function planAnimation(
         "Add a .safetensors or .gguf model there and restart ComfyUI.",
     };
   }
-  const requested = params.diffusionModel?.trim();
+  const requested = requestedRaw?.trim();
   const chosen = requested
     ? installed.find((m) => m.name === requested || modelBasename(m.name) === modelBasename(requested))
     : installed[0];
   if (!chosen) {
     return { ok: false, error: `Requested video model is not installed: ${modelBasename(requested!)}` };
   }
-  // The shared Wan infra (text encoder + VAE) must be present; the diffusion model already is (it came
-  // from discovery). A missing infra file is named — those are content-neutral, unlike the model.
-  const infraMissing = await videoModelsMissing(base, fetchFn, WAN_INFRA_FILES);
-  if (infraMissing.length) {
-    return {
-      ok: false,
-      error: `Wan text-encoder/VAE not installed on the ComfyUI host: ${infraMissing.join(", ")} — run scripts/fetch-wan22-models.ts, then restart ComfyUI`,
-    };
+  return chosen;
+}
+
+// Point the workflow's diffusion-loader node (37) at the chosen model, picking the loader class by
+// file format: GGUF weights load through the ComfyUI-GGUF node (unet_name only); .safetensors keep the
+// template's UNETLoader + weight_dtype (ADR-0021).
+function setDiffusionLoader(graph: VideoGraph, chosen: DiffusionModel): void {
+  const loader = graph["37"];
+  if (!loader) return;
+  if (isGguf(chosen.name)) {
+    loader.class_type = "UnetLoaderGGUF";
+    loader.inputs = { unet_name: chosen.name };
+  } else {
+    loader.class_type = "UNETLoader";
+    loader.inputs.unet_name = chosen.name;
   }
-  return {
-    // Node 37 (the diffusion loader) is set explicitly below; only the infra nodes need reconciling.
-    files: WAN_INFRA_FILES,
-    render: (imageName) => {
-      const graph = renderWanWorkflow({ ...toRenderParams(params), imageName }) as VideoGraph;
-      const loader = graph["37"];
-      if (loader) {
-        if (isGguf(chosen.name)) {
-          loader.class_type = "UnetLoaderGGUF"; // GGUF weights load through the ComfyUI-GGUF node,
-          loader.inputs = { unet_name: chosen.name }; // which takes only unet_name (no weight_dtype).
-        } else {
-          loader.class_type = "UNETLoader";
-          loader.inputs.unet_name = chosen.name; // keep the template's weight_dtype
-        }
-      }
-      return graph;
-    },
-  };
 }
 
 // animateImage — turn a still into a short video with Wan 2.2 TI2V 5B. Parallels generateImage: same
