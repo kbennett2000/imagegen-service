@@ -156,7 +156,7 @@ the checkpoint fetcher — downloads to the second drive, searches both drives s
 re-fetched (ADR-0017) — use the unified script instead:
 
 ```bash
-npx tsx scripts/fetch-missing-video-models.ts   # --models-root <dir> / --extra-root <dir> / --dry-run
+scripts/fetch-missing-video-models.sh   # --models-root <dir> / --extra-root <dir> / --dry-run
 ```
 
 The three files (from the official Comfy-Org repackage) land in the right subdirs:
