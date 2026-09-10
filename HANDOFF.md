@@ -51,8 +51,16 @@ skips the upload and renders from the prompt alone. `AnimateParams.image` is now
 requires it only for image pipelines (`pipelineNeedsImage`). UI: the picture block hides and Steps/CFG
 show for `wan-t2v`. Verified with `ns/rapidWAN22T2VGGUF_q4KMRapidBase.gguf` (4 steps, cfg 1) → valid
 MP4, `node_errors: {}`. Tests: 184 pass. **Now runnable on 12 GB: Wan 2.2 TI2V 5B, Wan 2.1 I2V (GGUF),
-Wan T2V (GGUF). Remaining: Hunyuan/SkyReels (own pipeline), VACE/Fun (control inputs), 14B fp16 (VRAM),
-and pipeline auto-detection.**
+Wan T2V (GGUF)** — all three GPU-verified, covering the Wan family (the bulk of the user's fittable
+models). **Deliberately NOT built (checked, blocked, not code-fixable now):** Hunyuan is a distinct
+architecture (4096-dim text encoder, double_blocks) and its support files are NOT installed on this
+box — no Hunyuan VAE, no `llava_llama3`/`clip_l` encoders (only Wan/SDXL are present) — so any Hunyuan
+pipeline would just fail preflight; it is also 13.2 GB fp8, over 12 GB VRAM. VACE/Fun are control
+models needing extra control inputs (pose/video), a different use case. 14B fp16 Wan models exceed
+12 GB. **Highest-value remaining enhancement: pipeline AUTO-DETECTION** (read a model's latent channels
+— 48→ti2v, 36→i2v, 16→t2v — from its file header, needs model-root config + GGUF header parsing) so
+the pipeline need not be picked by hand. Capability-wise every runnable model already works via manual
+pipeline selection; auto-detection is convenience.
 
 ### Prior — Video-model subfolder reconciliation (ADR-0020)
 **Video-model subfolder reconciliation (ADR-0020, branch
