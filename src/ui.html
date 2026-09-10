@@ -425,7 +425,11 @@
     }
 
     // Reflect image-to-video readiness from /health's `wan` block. Disable Animate (with a clear
-    // reason) until all three Wan model files are present on the ComfyUI host.
+    // reason) until all three Wan model files are present on the ComfyUI host. Two distinct not-ready
+    // cases: ComfyUI is unreachable (a connectivity problem — the model check couldn't even run, so
+    // `missing` carries the "comfyui-unreachable" sentinel), versus ComfyUI is up but the model files
+    // are genuinely absent. They need opposite fixes, so never send the "install a model" advice when
+    // the real problem is that ComfyUI is down.
     function populateAnim(h) {
       const animStatus = $("animStatus");
       const wan = h && h.wan;
@@ -433,13 +437,19 @@
         animStatus.className = "status ok";
         animStatus.textContent = "Video model ready (Wan 2.2 TI2V 5B).";
         $("animGo").disabled = false;
-      } else {
-        animStatus.className = "status bad";
-        const missing = (wan && Array.isArray(wan.missing)) ? wan.missing.join(", ") : "unknown";
-        animStatus.textContent = "Video model NOT installed — run scripts/fetch-wan22-models.ts, " +
-          "then restart ComfyUI. Missing: " + missing;
-        $("animGo").disabled = true;
+        return;
       }
+      animStatus.className = "status bad";
+      $("animGo").disabled = true;
+      const missing = (wan && Array.isArray(wan.missing)) ? wan.missing : [];
+      if (!h || h.comfyuiReachable === false || missing.indexOf("comfyui-unreachable") !== -1) {
+        animStatus.textContent = "Can't reach ComfyUI at " + ((h && h.comfyuiUrl) || "its configured URL") +
+          " — is it running? Video-model status is unknown until ComfyUI is reachable.";
+        return;
+      }
+      const list = missing.length ? missing.join(", ") : "unknown";
+      animStatus.textContent = "Video model NOT installed — run scripts/fetch-wan22-models.ts, " +
+        "then restart ComfyUI. Missing: " + list;
     }
 
     // Enable the Upscale control only when ComfyUI has an upscale model installed. The model dropdown
