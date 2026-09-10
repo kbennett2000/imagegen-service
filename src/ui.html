@@ -224,8 +224,8 @@
 
   <div class="layout">
     <form id="animForm">
-      <div class="imgblock">
-        <label for="animImageFile">Picture to animate <span class="hint">(required)</span></label>
+      <div class="imgblock" id="animImageBlock">
+        <label for="animImageFile">Picture to animate <span class="hint" id="animImageReq">(required)</span></label>
         <input id="animImageFile" type="file" accept="image/*,video/*" />
         <div id="animImageWrap" hidden>
           <img id="animImageThumb" class="thumb" alt="picture to animate" />
@@ -235,8 +235,9 @@
 
       <label for="animPipeline">Pipeline <span class="hint">(which workflow drives the model)</span></label>
       <select id="animPipeline">
-        <option value="wan22-ti2v" selected>Wan 2.2 TI2V (48-channel, image or text → video)</option>
+        <option value="wan22-ti2v" selected>Wan 2.2 TI2V (48-channel, image → video)</option>
         <option value="wan21-i2v">Wan 2.1 I2V (16-channel, image → video)</option>
+        <option value="wan-t2v">Wan T2V (16-channel, text → video, no picture)</option>
       </select>
       <p class="hint" style="margin:.3rem 0 0">
         Each video model is built for one architecture — pick the pipeline that matches. A model run
@@ -1002,11 +1003,16 @@
       }
     }
 
-    // Show the Steps/CFG overrides only for the Wan 2.1 i2v pipeline (distilled models need them).
+    // Reflect the selected pipeline: Steps/CFG overrides for the Wan 2.1 families (distilled models
+    // need them), and hide/relax the picture requirement for text-to-video.
     function syncPipelineUi() {
-      const wan21 = $("animPipeline").value === "wan21-i2v";
-      $("animSamplerRow").hidden = !wan21;
-      $("animSamplerHint").hidden = !wan21;
+      const p = $("animPipeline").value;
+      const showSampler = p === "wan21-i2v" || p === "wan-t2v";
+      $("animSamplerRow").hidden = !showSampler;
+      $("animSamplerHint").hidden = !showSampler;
+      const textOnly = p === "wan-t2v";
+      $("animImageBlock").hidden = textOnly;
+      $("animImageReq").textContent = textOnly ? "(not used)" : "(required)";
     }
     $("animPipeline").addEventListener("change", syncPipelineUi);
     syncPipelineUi();
@@ -1015,11 +1021,13 @@
       ev.preventDefault();
       clearAnimError();
 
-      if (!animImageB64) { showAnimError("Choose a picture to animate first."); return; }
+      const textOnly = $("animPipeline").value === "wan-t2v";
+      if (!textOnly && !animImageB64) { showAnimError("Choose a picture to animate first."); return; }
       const prompt = $("animPrompt").value.trim();
       if (!prompt) { showAnimError("Prompt is required."); return; }
 
-      const body = { image: animImageB64, prompt: prompt };
+      const body = { prompt: prompt };
+      if (animImageB64) body.image = animImageB64;
       const diffusionModel = $("animModel").value;
       if (diffusionModel) body.diffusionModel = diffusionModel;
       const pipeline = $("animPipeline").value;

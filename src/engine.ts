@@ -16,6 +16,7 @@ import {
   WAN21_VAE,
   WAN21_CLIP_VISION,
 } from "./wan21-workflow.js";
+import { renderWanT2vWorkflow, WAN_T2V_TEXT_ENCODER, WAN_T2V_VAE } from "./wan-t2v-workflow.js";
 import {
   getVideoModel,
   DEFAULT_ANIMATE_MODEL,
@@ -100,7 +101,9 @@ export type GenerateResult =
 // (1280x704, 24fps, 121 frames). Validated by the server before it reaches here.
 export interface AnimateParams {
   prompt: string;
-  image: string; // base64 still to animate (required)
+  // Base64 still to animate. Required for image-to-video pipelines; omitted for text-to-video
+  // (`pipeline: "wan-t2v"`), which generates from the prompt alone (ADR-0022, Phase 2).
+  image?: string;
   negativePrompt?: string;
   seed?: number;
   width?: number;
@@ -126,10 +129,16 @@ export interface AnimateParams {
 
 // The workflow families the service can drive (ADR-0022). Add a family = add its template + a branch
 // in planAnimation + an entry here.
-export type VideoPipeline = "wan22-ti2v" | "wan21-i2v";
-export const VIDEO_PIPELINES: readonly VideoPipeline[] = ["wan22-ti2v", "wan21-i2v"];
+export type VideoPipeline = "wan22-ti2v" | "wan21-i2v" | "wan-t2v";
+export const VIDEO_PIPELINES: readonly VideoPipeline[] = ["wan22-ti2v", "wan21-i2v", "wan-t2v"];
 export function isVideoPipeline(v: unknown): v is VideoPipeline {
   return typeof v === "string" && (VIDEO_PIPELINES as readonly string[]).includes(v);
+}
+
+// Text-to-video pipelines generate from the prompt alone — no input still. Everything else animates a
+// provided image, so the server requires one there and the engine uploads it.
+export function pipelineNeedsImage(pipeline: VideoPipeline | undefined): boolean {
+  return pipeline !== "wan-t2v";
 }
 
 export type AnimateResult =
@@ -486,6 +495,13 @@ const WAN21_INFRA_FILES: readonly VideoModelFile[] = [
   { loaderClass: "CLIPLoader", inputName: "clip_name", file: WAN21_TEXT_ENCODER, subdir: "text_encoders" },
   { loaderClass: "VAELoader", inputName: "vae_name", file: WAN21_VAE, subdir: "vae" },
   { loaderClass: "CLIPVisionLoader", inputName: "clip_name", file: WAN21_CLIP_VISION, subdir: "clip_vision" },
+];
+
+// Wan text-to-video shared infra (ADR-0022, Phase 2): text encoder + 16-ch VAE. No CLIP-vision (no
+// input image).
+const WAN_T2V_INFRA_FILES: readonly VideoModelFile[] = [
+  { loaderClass: "CLIPLoader", inputName: "clip_name", file: WAN_T2V_TEXT_ENCODER, subdir: "text_encoders" },
+  { loaderClass: "VAELoader", inputName: "vae_name", file: WAN_T2V_VAE, subdir: "vae" },
 ];
 
 // /health video readiness (ADR-0021): the discovered diffusion models + what (if anything) blocks
@@ -873,6 +889,9 @@ function contentTypeFor(filename: string): string {
 // build the ComfyUI graph once the still is uploaded. The transport (submit/poll/view) is shared.
 interface AnimationPlan {
   files: readonly VideoModelFile[];
+  // Whether the request must carry an input still (false for text-to-video). When false, the engine
+  // skips the upload and `render` is called with "".
+  needsImage: boolean;
   render: (imageName: string) => VideoGraph;
 }
 
@@ -914,6 +933,7 @@ async function planAnimation(
     }
     return {
       files: spec.files,
+      needsImage: true,
       render: (imageName) => spec.render({ ...toRenderParams(params), imageName }),
     };
   }
@@ -921,6 +941,30 @@ async function planAnimation(
   // Pick the diffusion model from ComfyUI's live inventory (shared by every dynamic Wan pipeline).
   const chosen = await chooseDiffusionModel(base, fetchFn, params.diffusionModel);
   if ("ok" in chosen) return chosen;
+
+  // Wan text-to-video pipeline (ADR-0022 Phase 2): prompt-only, no input image, no CLIP-vision.
+  if (params.pipeline === "wan-t2v") {
+    const infraMissing = await videoModelsMissing(base, fetchFn, WAN_T2V_INFRA_FILES);
+    if (infraMissing.length) {
+      return {
+        ok: false,
+        error: `Wan t2v support files not installed on the ComfyUI host: ${infraMissing.join(", ")} — install the Wan 2.1 VAE and umt5 text encoder, then restart ComfyUI`,
+      };
+    }
+    return {
+      files: WAN_T2V_INFRA_FILES,
+      needsImage: false,
+      render: () => {
+        const graph = renderWanT2vWorkflow({
+          ...toRenderParams(params),
+          steps: params.steps,
+          cfg: params.cfg,
+        }) as VideoGraph;
+        setDiffusionLoader(graph, chosen);
+        return graph;
+      },
+    };
+  }
 
   // Wan 2.1 image-to-video pipeline (ADR-0022): a different architecture — 16-ch VAE + CLIP-vision.
   if (params.pipeline === "wan21-i2v") {
@@ -933,6 +977,7 @@ async function planAnimation(
     }
     return {
       files: WAN21_INFRA_FILES, // node 37 set explicitly below; infra nodes reconciled by role
+      needsImage: true,
       render: (imageName) => {
         const graph = renderWan21I2vWorkflow({
           ...toRenderParams(params),
@@ -956,6 +1001,7 @@ async function planAnimation(
   }
   return {
     files: WAN_INFRA_FILES,
+    needsImage: true,
     render: (imageName) => {
       const graph = renderWanWorkflow({ ...toRenderParams(params), imageName }) as VideoGraph;
       setDiffusionLoader(graph, chosen);
@@ -1022,14 +1068,17 @@ export async function animateImage(
     const plan = await planAnimation(base, params, fetchFn);
     if ("ok" in plan) return plan; // a { ok:false, error } — nothing installed / not found
 
-    // Upload the still. A failure here is NOT swallowed (like img2img): without the input image there
-    // is nothing to animate, so the whole request fails.
-    let imageName: string;
-    try {
-      imageName = await uploadImage(base, fetchFn, params.image);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: `input image upload failed: ${reason}` };
+    // Upload the still for image-to-video pipelines. A failure here is NOT swallowed (like img2img):
+    // without the input image there is nothing to animate. Text-to-video plans need no image (ADR-0022).
+    let imageName = "";
+    if (plan.needsImage) {
+      if (!params.image) return { ok: false, error: "input image is required for this pipeline" };
+      try {
+        imageName = await uploadImage(base, fetchFn, params.image);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: `input image upload failed: ${reason}` };
+      }
     }
 
     const graph = plan.render(imageName);

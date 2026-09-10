@@ -15,8 +15,10 @@ import {
   videoReadiness,
   VIDEO_PIPELINES,
   isVideoPipeline,
+  pipelineNeedsImage,
   QUALITIES,
   type AnimateParams,
+  type VideoPipeline,
   type FetchFn,
   type GenerateParams,
   type Quality,
@@ -220,8 +222,18 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   if (typeof b.prompt !== "string" || b.prompt.trim() === "") {
     return { error: "`prompt` is required and must be a non-empty string" };
   }
-  if (typeof b.image !== "string" || b.image === "") {
-    return { error: "`image` is required and must be a non-empty base64 string" };
+  // Validate the pipeline early — it decides whether an input image is required (text-to-video
+  // generates from the prompt alone, ADR-0022).
+  if (b.pipeline !== undefined && !isVideoPipeline(b.pipeline)) {
+    return { error: `\`pipeline\` must be one of: ${VIDEO_PIPELINES.join(", ")}` };
+  }
+  const pipeline = isVideoPipeline(b.pipeline) ? b.pipeline : undefined;
+  if (pipelineNeedsImage(pipeline as VideoPipeline | undefined)) {
+    if (typeof b.image !== "string" || b.image === "") {
+      return { error: "`image` is required and must be a non-empty base64 string" };
+    }
+  } else if (b.image !== undefined && typeof b.image !== "string") {
+    return { error: "`image` must be a base64 string" };
   }
   if (b.negativePrompt !== undefined && typeof b.negativePrompt !== "string") {
     return { error: "`negativePrompt` must be a string" };
@@ -255,10 +267,6 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
     const err = modelNameError("diffusionModel", b.diffusionModel);
     if (err) return { error: err };
   }
-  // Workflow family (ADR-0022): which pipeline drives the chosen model.
-  if (b.pipeline !== undefined && !isVideoPipeline(b.pipeline)) {
-    return { error: `\`pipeline\` must be one of: ${VIDEO_PIPELINES.join(", ")}` };
-  }
   // Sampler overrides (Wan 2.1 i2v distilled models): steps 1-100, cfg 0-30.
   if (
     b.steps !== undefined &&
@@ -270,7 +278,8 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
     return { error: "`cfg` must be a number in [0, 30]" };
   }
 
-  const params: AnimateParams = { prompt: b.prompt, image: b.image };
+  const params: AnimateParams = { prompt: b.prompt };
+  if (typeof b.image === "string" && b.image !== "") params.image = b.image;
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
   if (typeof b.seed === "number") params.seed = b.seed;
   if (typeof b.width === "number") params.width = b.width;

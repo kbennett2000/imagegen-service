@@ -42,8 +42,17 @@ the diffusion loader by extension (`setDiffusionLoader`) and reconciles the pipe
 UI: a Pipeline dropdown + Steps/CFG overrides shown only for `wan21-i2v`. Verified on the box by
 submitting the rendered graph to ComfyUI with `ns/lightx2v4stepGgufQ4KMWan21_i2v480P.gguf` (4 steps,
 cfg 1, 640×480×25): produced a valid 143 KB MP4, `node_errors: {}`. Tests: 181 pass (+ wan21 render +
-missing-clip-vision cases), tsc clean. **Next: Phase 2 (Wan T2V), then auto-detection so the pipeline
-need not be picked by hand.**
+missing-clip-vision cases), tsc clean.
+
+**Phase 2 LANDED (Wan T2V), GPU-verified.** Text-to-video (no input still): new `src/workflows/
+wan-t2v.json` + `src/wan-t2v-workflow.ts` (`EmptyHunyuanLatentVideo` + umt5 + `wan_2.1_vae`, no
+CLIP-vision). Pipeline id `wan-t2v`; `AnimationPlan` gains `needsImage` (false here) so the engine
+skips the upload and renders from the prompt alone. `AnimateParams.image` is now optional; the server
+requires it only for image pipelines (`pipelineNeedsImage`). UI: the picture block hides and Steps/CFG
+show for `wan-t2v`. Verified with `ns/rapidWAN22T2VGGUF_q4KMRapidBase.gguf` (4 steps, cfg 1) → valid
+MP4, `node_errors: {}`. Tests: 184 pass. **Now runnable on 12 GB: Wan 2.2 TI2V 5B, Wan 2.1 I2V (GGUF),
+Wan T2V (GGUF). Remaining: Hunyuan/SkyReels (own pipeline), VACE/Fun (control inputs), 14B fp16 (VRAM),
+and pipeline auto-detection.**
 
 ### Prior — Video-model subfolder reconciliation (ADR-0020)
 **Video-model subfolder reconciliation (ADR-0020, branch

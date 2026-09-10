@@ -180,6 +180,63 @@ test("animateImage: pipeline=wan21-i2v with CLIP-vision missing -> clean, action
   assert.equal(mock.submitted.length, 0);
 });
 
+// ---- Wan text-to-video pipeline (ADR-0022 Phase 2) ---------------------------------------
+
+test("animateImage: pipeline=wan-t2v generates from the prompt alone (no image upload)", async () => {
+  const mock = new MockComfy({
+    outputFilename: (pid) => `${pid}.mp4`,
+    wanUnets: [],
+    wanGgufUnets: ["sub/video-model-a.gguf"],
+  });
+  const r = await animateImage(
+    URL,
+    { prompt: "a sunset timelapse", pipeline: "wan-t2v", steps: 4, cfg: 1 },
+    mock.fetch,
+  );
+  assert.equal(r.ok, true);
+  const g = mock.submitted[0]!.graph;
+  assert.equal(g["37"].class_type, "UnetLoaderGGUF");
+  assert.equal(g["55"].class_type, "EmptyHunyuanLatentVideo"); // text-to-video latent, not i2v
+  assert.equal(g["39"].inputs.vae_name, "wan_2.1_vae.safetensors");
+  assert.equal(g["3"].inputs.steps, 4);
+  assert.equal(g["3"].inputs.cfg, 1);
+  assert.equal(mock.uploads.length, 0); // no still uploaded for text-to-video
+  assert.equal(g["52"], undefined); // no LoadImage node in the t2v graph
+});
+
+test("POST /animate: pipeline=wan-t2v needs no image -> 200 video/mp4", async () => {
+  const mock = new MockComfy({ outputFilename: (pid) => `${pid}.mp4` });
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/animate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a river at dawn", pipeline: "wan-t2v", steps: 4, cfg: 1 }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "video/mp4");
+    assert.equal(mock.submitted[0]!.graph["55"].class_type, "EmptyHunyuanLatentVideo");
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /animate: an image IS still required for an image pipeline (no pipeline given) -> 422", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/animate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "come alive" }),
+    });
+    assert.equal(res.status, 422);
+    assert.match(((await res.json()) as any).error, /image/);
+  } finally {
+    await svc.close();
+  }
+});
+
 // ---- architecture-incompatibility error translation (ADR-0022) ---------------------------
 
 test("formatVideoExecutionError: a tensor-size mismatch reads as an architecture message", () => {
