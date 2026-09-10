@@ -8,8 +8,8 @@ The service shipped with one base SDXL checkpoint (the workflow-template default
 request or via `config.comfyui.checkpoint`, ADR-0004) and twelve style LoRAs
 ([src/style-loras.ts](../../src/style-loras.ts)). Callers who wanted a different base model had to know
 its exact ComfyUI filename — there was no way to discover what was available, and the installer only
-fetched the one base checkpoint. To offer a *wide variety* of SFW image models, this ADR adds a
-curated catalog of alternative SFW SDXL checkpoints and more style LoRAs, plus the selection
+fetched the one base checkpoint. To offer a *wide variety* of image models, this ADR adds a
+curated catalog of alternative SDXL checkpoints and more style LoRAs, plus the selection
 machinery to pick and discover them. It builds on ADR-0013 (Civitai-authenticated downloads) for the
 sources that are Civitai-gated.
 
@@ -17,7 +17,7 @@ sources that are Civitai-gated.
 
 ### A checkpoint catalog, mirroring the style map
 [src/checkpoints.ts](../../src/checkpoints.ts) adds `CHECKPOINTS`, a friendly-name → `{ file,
-description }` map, shaped exactly like `STYLE_LORAS`. It lists the *extra* curated SFW SDXL
+description }` map, shaped exactly like `STYLE_LORAS`. It lists the *extra* curated SDXL
 checkpoints; the stock SDXL base stays the workflow-template default and is intentionally not in the
 catalog. All entries are single-file SDXL checkpoints the existing SDXL workflows load unchanged
 (only node `"4"` is set — the refiner node `"11"` stays the stock SDXL refiner, which is valid for
@@ -40,8 +40,8 @@ handler — never throwing) lists each catalog entry `{ name, file, description,
 `checkpointsInstalled` array alongside `lorasLoaded`, so a monitor sees which catalog files are
 actually on the box. The response notes that any installed checkpoint also works by exact filename.
 
-### More SFW style LoRAs
-`STYLE_LORAS` gains additional SFW artistic styles (each a `loraFile` + `trigger` + `strength` +
+### More style LoRAs
+`STYLE_LORAS` gains additional artistic styles (each a `loraFile` + `trigger` + `strength` +
 `noRefiner: true` + optional `extraNegatives`), and the previously-sourceless `watercolour` entry
 gets a working source. No engine change — new entries flow automatically into `/styles`, `/health`
 `lorasLoaded`, and the LoRA-injection path, exactly like the original twelve.
@@ -49,14 +49,14 @@ gets a working source. No engine change — new entries flow automatically into 
 ### Sourcing (curation + install)
 Every catalog checkpoint and new LoRA gets a line in
 [install/models.manifest](../../install/models.manifest) (`checkpoints|…` / `loras|…`), keeping the
-one-place source list the installers read. Sources are curated **SFW-safe**, version-pinned, and
+one-place source list the installers read. Sources are curated, version-pinned, and
 prefer an ungated Hugging Face mirror for robustness; Civitai-gated sources rely on ADR-0013's token.
 A checkpoint's catalog `file` matches its manifest `dest-filename` exactly. The service never
 downloads models itself — it references them by name; the installer (or a manual download) puts the
 files under ComfyUI's `models/checkpoints` and `models/loras`.
 
 ## Consequences
-- **Callers get a discoverable, curated set of SFW base models and more styles**, selectable by a
+- **Callers get a discoverable, curated set of base models and more styles**, selectable by a
   stable friendly name, without needing to know ComfyUI filenames. Raw filenames still work.
 - **No new runtime behavior risk to the render path.** The catalog is a lookup in front of the
   unchanged engine; checkpoint injection still touches only node `"4"`, and the refiner is untouched.

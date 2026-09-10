@@ -12,8 +12,8 @@ import {
   DEFAULT_CHECKPOINT,
   generateImage,
   probeComfy,
+  videoReadiness,
   QUALITIES,
-  wanModelsMissing,
   type AnimateParams,
   type FetchFn,
   type GenerateParams,
@@ -246,6 +246,13 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   if (b.model !== undefined && !isAnimateModel(b.model)) {
     return { error: `\`model\` must be one of: ${ANIMATE_MODELS.join(", ")}` };
   }
+  // The chosen diffusion model (ADR-0021) is an opaque ComfyUI name we don't have a catalog for —
+  // validate only its path-safety (a subfolder prefix is allowed); ComfyUI is the authority on which
+  // names exist, and the engine falls back to the first installed one when it's absent.
+  if (b.diffusionModel !== undefined) {
+    const err = modelNameError("diffusionModel", b.diffusionModel);
+    if (err) return { error: err };
+  }
 
   const params: AnimateParams = { prompt: b.prompt, image: b.image };
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
@@ -255,6 +262,9 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   if (typeof b.frames === "number") params.frames = b.frames;
   if (typeof b.fps === "number") params.fps = b.fps;
   if (isAnimateModel(b.model)) params.model = b.model;
+  if (typeof b.diffusionModel === "string" && b.diffusionModel.trim() !== "") {
+    params.diffusionModel = b.diffusionModel.trim();
+  }
   return { params };
 }
 
@@ -489,7 +499,7 @@ function handleStyles(res: ServerResponse): void {
   });
 }
 
-// GET /checkpoints — the curated SFW checkpoint catalog, each flagged with whether its file is
+// GET /checkpoints — the curated checkpoint catalog, each flagged with whether its file is
 // actually installed on the fronted ComfyUI. probeComfy never throws (empty lists on failure), so
 // `installed` degrades to false rather than erroring.
 async function handleCheckpoints(res: ServerResponse, config: Config, fetchFn: FetchFn): Promise<void> {
@@ -498,7 +508,7 @@ async function handleCheckpoints(res: ServerResponse, config: Config, fetchFn: F
     name,
     file: info.file,
     description: info.description,
-    // Matched by basename so a subfoldered install ("s/foo.safetensors") still reads installed (ADR-0019).
+    // Matched by basename so a subfoldered install ("sub/foo.safetensors") still reads installed (ADR-0019).
     installed: checkpointInstalled(info.file, installed),
   }));
   sendJson(res, 200, {
@@ -518,7 +528,7 @@ async function handleHealth(
   const recipeFiles = Array.from(new Set(Object.values(STYLE_LORAS).map((r) => r.loraFile)));
   const lorasLoaded = recipeFiles.filter((f) => loras.includes(f));
   // Same for the curated checkpoint catalog: which of its files are actually installed. Matched by
-  // basename so a subfoldered install ("s/foo.safetensors") still counts (ADR-0019).
+  // basename so a subfoldered install ("sub/foo.safetensors") still counts (ADR-0019).
   const catalogCheckpoints = Array.from(new Set(Object.values(CHECKPOINTS).map((c) => c.file)));
   const checkpointsInstalled = catalogCheckpoints.filter((f) => checkpointInstalled(f, checkpoints));
   // The effective default checkpoint (config override, else the workflow template's), plus the full
@@ -527,10 +537,13 @@ async function handleHealth(
   const checkpoint = reconcileCheckpoint(config.comfyui.checkpoint || DEFAULT_CHECKPOINT, checkpoints);
   // Effective default upscale model (config override, else the first installed) + the full list.
   const upscaleModel = config.comfyui.upscaleModel || upscaleModels[0] || "";
-  // Image-to-video readiness (ADR-0009): which of the three Wan 2.2 files are present. Best-effort —
-  // when ComfyUI is unreachable all three read as missing and `ready` is false. Skipped entirely when
-  // unreachable to avoid three doomed probes.
-  const wanMissing = reachable ? await wanModelsMissing(config.comfyui.url, fetchFn) : ["comfyui-unreachable"];
+  // Image-to-video readiness (ADR-0021): the diffusion models ComfyUI actually has (for the picker),
+  // plus whatever blocks animation. `missing` carries content-neutral infra files and/or the
+  // "diffusion-model" sentinel — never a model name. When unreachable, skip the probes and flag it so
+  // the UI can say so rather than claim a model is missing (ADR: 0021 message split).
+  const { videoModels, missing: wanMissing } = reachable
+    ? await videoReadiness(config.comfyui.url, fetchFn)
+    : { videoModels: [] as string[], missing: ["comfyui-unreachable"] };
   // Video stitching availability (ADR-0010): whether ffmpeg is on the host. Independent of ComfyUI.
   const stitchAvailable = await ffmpegCheck();
   sendJson(res, 200, {
@@ -543,6 +556,9 @@ async function handleHealth(
     upscaleModel,
     upscaleModels,
     wan: { ready: wanMissing.length === 0, missing: wanMissing },
+    // The installed image-to-video diffusion models, discovered live (ADR-0021) — the UI's video Model
+    // picker is built from this, so no model name is compiled into the client.
+    videoModels,
     stitch: { available: stitchAvailable },
   });
 }

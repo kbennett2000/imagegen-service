@@ -30,6 +30,9 @@ export interface MockOptions {
   wanUnets?: string[];
   wanClips?: string[];
   wanVaes?: string[];
+  // GGUF diffusion models advertised via the ComfyUI-GGUF node's UnetLoaderGGUF.unet_name (ADR-0021).
+  // Undefined => the node is absent (404), like a host without ComfyUI-GGUF installed.
+  wanGgufUnets?: string[];
   // Simulate ComfyUI being down: every request rejects (network error).
   down?: boolean;
   // Make POST /prompt fail with this HTTP status (e.g. 400/500). Default: succeeds.
@@ -169,6 +172,15 @@ export class MockComfy {
         const unets = this.opts.wanUnets ?? DEFAULT_WAN_UNETS;
         return this.jsonResponse(200, {
           UNETLoader: { input: { required: { unet_name: [unets] } } },
+        });
+      }
+
+      // GET /object_info/UnetLoaderGGUF — advertises GGUF diffusion models (ADR-0021). Absent (404)
+      // unless a test opts in via wanGgufUnets, mirroring a host without the ComfyUI-GGUF node.
+      if (method === "GET" && path.startsWith("/object_info/UnetLoaderGGUF")) {
+        if (!this.opts.wanGgufUnets) return new Response("not found", { status: 404 });
+        return this.jsonResponse(200, {
+          UnetLoaderGGUF: { input: { required: { unet_name: [this.opts.wanGgufUnets] } } },
         });
       }
 

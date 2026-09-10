@@ -85,7 +85,7 @@ export const STYLE_LORAS: Record<string, StyleLora> = {
     strength: 1.0,
     noRefiner: true,
   },
-  // --- Additional SFW styles (ADR-0014) ---
+  // --- Additional styles (ADR-0014) ---
   "line art": {
     loraFile: "LineAniRedmondV2-Lineart-LineAniAF.safetensors",
     trigger: "LineAniAF, lineart",
@@ -146,7 +146,7 @@ export const STYLE_LORAS: Record<string, StyleLora> = {
     strength: 0.8,
     noRefiner: true,
   },
-  // --- More SFW styles sourced from Civitai (ADR-0016) ---
+  // --- More styles sourced from Civitai (ADR-0016) ---
   "ink wash": {
     loraFile: "Zen_Ink_Wash_Sumi-e.safetensors",
     trigger: "sumi-e, ink wash painting",

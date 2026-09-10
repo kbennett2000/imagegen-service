@@ -7,12 +7,16 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { reconcileCheckpoint, modelInstalled, reconcileModelName } from "./checkpoints.js";
+import { reconcileCheckpoint, modelBasename, modelInstalled, reconcileModelName } from "./checkpoints.js";
 import { ensureTrigger, lookupStyleLora, type StyleLora } from "./style-loras.js";
+import { renderWanWorkflow, WAN_TEXT_ENCODER, WAN_VAE } from "./wan-workflow.js";
 import {
   getVideoModel,
+  DEFAULT_ANIMATE_MODEL,
   type AnimateModel,
   type VideoModelFile,
+  type VideoGraph,
+  type VideoRenderParams,
 } from "./video-models.js";
 
 // fetch is dependency-injected so tests drive the whole HTTP flow with no GPU / no ComfyUI.
@@ -100,6 +104,10 @@ export interface AnimateParams {
   // Which video model to use (ADR-0015). Omitted => the default (wan-5b), so existing callers are
   // unaffected. The server validates this against ANIMATE_MODELS before it reaches here.
   model?: AnimateModel;
+  // The image-to-video diffusion model to animate with, as the exact name ComfyUI advertises
+  // (discovered via /health, may carry a subfolder prefix) — ADR-0021. Omitted => the first installed
+  // one. Only consulted on the default (Wan) path; ignored for a legacy `model` id like ltxv.
+  diffusionModel?: string;
 }
 
 export type AnimateResult =
@@ -401,7 +409,7 @@ export async function listLoras(base: string, fetchFn: FetchFn): Promise<string[
 // and animation can run; a non-empty list is exactly what to fetch. Each file names the object_info
 // loader + combo to probe; results keep the spec's file order. All files read missing when ComfyUI is
 // unreachable (each probe returns []). Presence is matched by BASENAME (ADR-0020) so a subfoldered
-// install ("s/wan….safetensors") still counts as present, mirroring the checkpoint path (ADR-0019).
+// install ("sub/wan….safetensors") still counts as present, mirroring the checkpoint path (ADR-0019).
 export async function videoModelsMissing(
   base: string,
   fetchFn: FetchFn,
@@ -420,6 +428,49 @@ export async function videoModelsMissing(
 // generic check with the wan-5b spec's file list.
 export async function wanModelsMissing(base: string, fetchFn: FetchFn): Promise<string[]> {
   return videoModelsMissing(base, fetchFn, getVideoModel("wan-5b").files);
+}
+
+export interface DiffusionModel {
+  name: string; // exact ComfyUI name, with any subfolder prefix
+  loaderClass: string; // "UNETLoader" (.safetensors) or "UnetLoaderGGUF" (.gguf)
+}
+
+// Every image-to-video diffusion model ComfyUI advertises, across the plain (.safetensors) and GGUF
+// (.gguf) loaders (ADR-0021). Names are read live and never persisted, so NO model name lives in this
+// repo. [] when unreachable or none installed. De-duped by name (plain loader wins on any overlap).
+export async function listDiffusionModels(base: string, fetchFn: FetchFn): Promise<DiffusionModel[]> {
+  const [plain, gguf] = await Promise.all([
+    objectInfoOptions(base, fetchFn, "UNETLoader", "unet_name"),
+    objectInfoOptions(base, fetchFn, "UnetLoaderGGUF", "unet_name"),
+  ]);
+  const seen = new Set<string>();
+  const out: DiffusionModel[] = [];
+  for (const name of plain) if (!seen.has(name)) (seen.add(name), out.push({ name, loaderClass: "UNETLoader" }));
+  for (const name of gguf) if (!seen.has(name)) (seen.add(name), out.push({ name, loaderClass: "UnetLoaderGGUF" }));
+  return out;
+}
+
+// Wan shared infrastructure — text encoder + VAE, content-neutral files common to every Wan i2v model.
+// The DIFFUSION model is discovered live (ADR-0021) and deliberately NOT listed here: only these
+// neutral files are ever named in the repo.
+const WAN_INFRA_FILES: readonly VideoModelFile[] = [
+  { loaderClass: "CLIPLoader", inputName: "clip_name", file: WAN_TEXT_ENCODER, subdir: "text_encoders" },
+  { loaderClass: "VAELoader", inputName: "vae_name", file: WAN_VAE, subdir: "vae" },
+];
+
+// /health video readiness (ADR-0021): the discovered diffusion models + what (if anything) blocks
+// animation. `missing` lists content-neutral infra files and/or the "diffusion-model" sentinel — never
+// a specific model name. Empty `missing` => ready.
+export async function videoReadiness(
+  base: string,
+  fetchFn: FetchFn,
+): Promise<{ videoModels: string[]; missing: string[] }> {
+  const [models, infraMissing] = await Promise.all([
+    listDiffusionModels(base, fetchFn),
+    videoModelsMissing(base, fetchFn, WAN_INFRA_FILES),
+  ]);
+  const missing = [...(models.length ? [] : ["diffusion-model"]), ...infraMissing];
+  return { videoModels: models.map((m) => m.name), missing };
 }
 
 async function loraAvailable(base: string, fetchFn: FetchFn, loraFile: string): Promise<boolean> {
@@ -580,7 +631,7 @@ export async function generateImage(
     setNodeSize(graph, "5", params.width, params.height); // EmptyLatentImage (both workflows)
     setNodeCheckpoint(graph, "4", params.checkpoint); // base checkpoint override (both workflows)
     // Reconcile every checkpoint node against what ComfyUI actually reports, so a subfoldered install
-    // (e.g. "s/sd_xl_base_1.0.safetensors") is matched by basename and the exact ckpt_name is injected
+    // (e.g. "sub/sd_xl_base_1.0.safetensors") is matched by basename and the exact ckpt_name is injected
     // — for the base node "4" (override or template default) and the refiner node "11" alike. Best
     // effort: if the list can't be fetched, leave each ckpt_name as-is and let ComfyUI report (ADR-0019).
     let availableCheckpoints: string[] = [];
@@ -770,6 +821,101 @@ function contentTypeFor(filename: string): string {
 
 // ---- image-to-video entry (ADR-0009) -----------------------------------------------------
 
+// A resolved animation plan: which files must be present (for subfolder reconciliation) and how to
+// build the ComfyUI graph once the still is uploaded. The transport (submit/poll/view) is shared.
+interface AnimationPlan {
+  files: readonly VideoModelFile[];
+  render: (imageName: string) => VideoGraph;
+}
+
+// The render params common to every path (everything but the uploaded still's name).
+function toRenderParams(params: AnimateParams): Omit<VideoRenderParams, "imageName"> {
+  return {
+    prompt: params.prompt,
+    negativePrompt: params.negativePrompt,
+    seed: params.seed,
+    width: params.width,
+    height: params.height,
+    frames: params.frames,
+    fps: params.fps,
+  };
+}
+
+function isGguf(name: string): boolean {
+  return name.toLowerCase().endsWith(".gguf");
+}
+
+// Resolve how to animate this request (ADR-0021). Default path: Wan i2v with a diffusion model
+// DISCOVERED live from ComfyUI (no model name in the repo), loader chosen by file format. A non-default
+// `model` id (e.g. ltxv) keeps its fixed registry spec. Returns a plan, or a clean { ok:false } error
+// whose message never names a discovered model.
+async function planAnimation(
+  base: string,
+  params: AnimateParams,
+  fetchFn: FetchFn,
+): Promise<AnimationPlan | { ok: false; error: string }> {
+  // Legacy registry path: an explicit non-default model id keeps its own workflow + fixed file list.
+  if (params.model && params.model !== DEFAULT_ANIMATE_MODEL) {
+    const spec = getVideoModel(params.model);
+    const missing = await videoModelsMissing(base, fetchFn, spec.files);
+    if (missing.length) {
+      return {
+        ok: false,
+        error: `${spec.label} model files not installed on the ComfyUI host: ${missing.join(", ")} — run ${spec.fetchHint}, then restart ComfyUI`,
+      };
+    }
+    return {
+      files: spec.files,
+      render: (imageName) => spec.render({ ...toRenderParams(params), imageName }),
+    };
+  }
+
+  // Default: Wan image-to-video with a diffusion model from ComfyUI's live inventory.
+  const installed = await listDiffusionModels(base, fetchFn);
+  if (installed.length === 0) {
+    return {
+      ok: false,
+      error:
+        "No image-to-video diffusion model is installed in ComfyUI (models/diffusion_models/). " +
+        "Add a .safetensors or .gguf model there and restart ComfyUI.",
+    };
+  }
+  const requested = params.diffusionModel?.trim();
+  const chosen = requested
+    ? installed.find((m) => m.name === requested || modelBasename(m.name) === modelBasename(requested))
+    : installed[0];
+  if (!chosen) {
+    return { ok: false, error: `Requested video model is not installed: ${modelBasename(requested!)}` };
+  }
+  // The shared Wan infra (text encoder + VAE) must be present; the diffusion model already is (it came
+  // from discovery). A missing infra file is named — those are content-neutral, unlike the model.
+  const infraMissing = await videoModelsMissing(base, fetchFn, WAN_INFRA_FILES);
+  if (infraMissing.length) {
+    return {
+      ok: false,
+      error: `Wan text-encoder/VAE not installed on the ComfyUI host: ${infraMissing.join(", ")} — run scripts/fetch-wan22-models.ts, then restart ComfyUI`,
+    };
+  }
+  return {
+    // Node 37 (the diffusion loader) is set explicitly below; only the infra nodes need reconciling.
+    files: WAN_INFRA_FILES,
+    render: (imageName) => {
+      const graph = renderWanWorkflow({ ...toRenderParams(params), imageName }) as VideoGraph;
+      const loader = graph["37"];
+      if (loader) {
+        if (isGguf(chosen.name)) {
+          loader.class_type = "UnetLoaderGGUF"; // GGUF weights load through the ComfyUI-GGUF node,
+          loader.inputs = { unet_name: chosen.name }; // which takes only unet_name (no weight_dtype).
+        } else {
+          loader.class_type = "UNETLoader";
+          loader.inputs.unet_name = chosen.name; // keep the template's weight_dtype
+        }
+      }
+      return graph;
+    },
+  };
+}
+
 // animateImage — turn a still into a short video with Wan 2.2 TI2V 5B. Parallels generateImage: same
 // POST /prompt -> poll /history BY OWN prompt_id -> /view transport, same never-throw discipline. The
 // image path (generateImage) is untouched. Two differences: a hard preflight on the Wan model files
@@ -781,17 +927,11 @@ export async function animateImage(
   fetchFn: FetchFn = fetch,
 ): Promise<AnimateResult> {
   const base = comfyBase(comfyUrl);
-  const spec = getVideoModel(params.model);
   try {
-    // Preflight: this model's files must be installed. Fail cleanly and actionably if not — unlike
-    // the IP-Adapter path, there is no meaningful render without them.
-    const missing = await videoModelsMissing(base, fetchFn, spec.files);
-    if (missing.length) {
-      return {
-        ok: false,
-        error: `${spec.label} model files not installed on the ComfyUI host: ${missing.join(", ")} — run ${spec.fetchHint}, then restart ComfyUI`,
-      };
-    }
+    // Resolve HOW to animate (ADR-0021): the default Wan path picks a diffusion model from ComfyUI's
+    // live inventory (no model name in the repo); a legacy `model` id keeps its fixed registry spec.
+    const plan = await planAnimation(base, params, fetchFn);
+    if ("ok" in plan) return plan; // a { ok:false, error } — nothing installed / not found
 
     // Upload the still. A failure here is NOT swallowed (like img2img): without the input image there
     // is nothing to animate, so the whole request fails.
@@ -803,22 +943,14 @@ export async function animateImage(
       return { ok: false, error: `input image upload failed: ${reason}` };
     }
 
-    const graph = spec.render({
-      prompt: params.prompt,
-      negativePrompt: params.negativePrompt,
-      seed: params.seed,
-      width: params.width,
-      height: params.height,
-      frames: params.frames,
-      fps: params.fps,
-      imageName,
-    });
+    const graph = plan.render(imageName);
 
     // Reconcile each model-file input against ComfyUI's live list so a subfoldered install
-    // ("s/wan….safetensors") loads by its exact prefixed name (ADR-0020). The renderers stay pure
-    // and emit bare names; the prefix is recovered here, mirroring generateImage's ckpt reconcile.
-    // A truly-absent file is left unchanged, so ComfyUI still returns its own clean "not found".
-    for (const f of spec.files) {
+    // ("sub/foo.safetensors") loads by its exact prefixed name (ADR-0020). The renderers stay pure and
+    // emit bare names; the prefix is recovered here, mirroring generateImage's ckpt reconcile. A
+    // truly-absent file is left unchanged, so ComfyUI still returns its own clean "not found". (The
+    // diffusion loader on the Wan path is already set to the exact discovered name by the plan.)
+    for (const f of plan.files) {
       const options = await objectInfoOptions(base, fetchFn, f.loaderClass, f.inputName);
       for (const node of Object.values(graph)) {
         if (node.class_type === f.loaderClass && typeof node.inputs[f.inputName] === "string") {

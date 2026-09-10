@@ -6,7 +6,7 @@ Accepted
 ## Context
 `POST /animate` (ADR-0008/0009) was hardwired to one model, Wan 2.2 TI2V 5B: `animateImage` called
 `wanModelsMissing` then `renderWanWorkflow` directly, and `AnimateParams` had no way to pick a model.
-To offer a *variety* of SFW video models, `/animate` needs to dispatch across models by id, each
+To offer a *variety* of video models, `/animate` needs to dispatch across models by id, each
 contributing its own required-file list and its own ComfyUI workflow, while the shared transport
 (upload → POST /prompt → poll `/history` by own id → `/view`) and the never-throw / video-tier-timeout
 discipline stay exactly as they are. This ADR adds a small model registry and a second model,
@@ -52,7 +52,7 @@ ungated HF, so `scripts/fetch-ltxv-models.ts` is a pure-HF fetcher reusing the w
 (~6.3 GB) fit the 12 GB card comfortably.
 
 ### Model choice rationale
-LTX-Video 2B v0.9.5 was picked as the second model because it is self-contained, fast, SFW/general,
+LTX-Video 2B v0.9.5 was picked as the second model because it is self-contained, fast, general,
 fits 12 GB, and uses ComfyUI's native nodes with a well-documented canonical i2v template. Wan 2.2
 **14B** was deferred: its high/low-noise dual-expert structure is a materially more complex graph.
 The registry makes adding it (or any model) a matter of one spec + one template + one fetch script.

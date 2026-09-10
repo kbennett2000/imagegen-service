@@ -1,5 +1,5 @@
 // Checkpoint catalog — a friendly-name -> ComfyUI checkpoint filename map, mirroring the
-// style-loras.ts pattern. It gives callers a stable, discoverable set of SFW base models to pick
+// style-loras.ts pattern. It gives callers a stable, discoverable set of curated base models to pick
 // from (GET /checkpoints), and lets /generate accept a friendly NAME (e.g. "dreamshaper") in the
 // `checkpoint` field instead of only the raw ComfyUI filename.
 //
@@ -15,7 +15,7 @@ export interface CheckpointInfo {
 
 // Keys are normalized (trim + lowercase). The default SDXL base is intentionally NOT listed here —
 // it is the workflow-template default and is always available; this catalog is the *extra* curated
-// SFW checkpoints. All are single-file SDXL checkpoints usable by the existing SDXL workflows.
+// checkpoints. All are single-file SDXL checkpoints usable by the existing SDXL workflows.
 export const CHECKPOINTS: Record<string, CheckpointInfo> = {
   realvisxl: {
     file: "RealVisXL_V5.0_fp16.safetensors",
@@ -33,7 +33,7 @@ export const CHECKPOINTS: Record<string, CheckpointInfo> = {
     file: "zavychromaxl_v100.safetensors",
     description: "Stylized, cinematic fantasy art (ZavyChroma XL).",
   },
-  // --- Popular SFW SDXL checkpoints from Civitai (ADR-0016). All full (non-distilled) SDXL 1.0. ---
+  // --- Popular SDXL checkpoints from Civitai (ADR-0016). All full (non-distilled) SDXL 1.0. ---
   dreamshaper: {
     file: "dreamshaperXL_alpha2Xl10.safetensors",
     description: "Versatile painterly-to-photoreal all-rounder (DreamShaper XL).",
@@ -84,20 +84,20 @@ export function resolveCheckpoint(value?: string | null): string | undefined {
 
 // --- subfolder reconciliation (ADR-0019) --------------------------------------------------
 // ComfyUI lists each checkpoint relative to whichever configured root it was found under, so the
-// SAME file reads as "foo.safetensors" when it sits at a checkpoints root or "s/foo.safetensors"
+// SAME file reads as "foo.safetensors" when it sits at a checkpoints root or "sub/foo.safetensors"
 // when it sits in a subfolder of one. The catalog and the workflow templates always use bare
 // filenames, so the two must be reconciled by basename or every subfoldered model reads as "not
 // installed" and its ckpt_name fails to load.
 
 // The bare filename of a ComfyUI ckpt_name, dropping any forward-slash subfolder prefix
-// (e.g. "s/foo.safetensors" -> "foo.safetensors"). ComfyUI always uses "/" here, even on Windows.
+// (e.g. "sub/foo.safetensors" -> "foo.safetensors"). ComfyUI always uses "/" here, even on Windows.
 export function checkpointBasename(name: string): string {
   const slash = name.lastIndexOf("/");
   return slash === -1 ? name : name.slice(slash + 1);
 }
 
 // Is `file` (a bare catalog/template filename) installed among the names ComfyUI reports? Matched by
-// basename so a subfoldered install ("s/foo.safetensors") still counts as installed.
+// basename so a subfoldered install ("sub/foo.safetensors") still counts as installed.
 export function checkpointInstalled(file: string, available: readonly string[]): boolean {
   const base = checkpointBasename(file);
   return available.some((a) => checkpointBasename(a) === base);

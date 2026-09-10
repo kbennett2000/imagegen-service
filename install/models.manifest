@@ -48,7 +48,7 @@ loras|Lego_XL_v2.1.safetensors|https://huggingface.co/lordjia/lelo-lego-lora-for
 loras|sketch_style.safetensors|https://huggingface.co/Linaqruf/sketch-style-xl-lora/resolve/main/sketch-style-xl.safetensors|-|25
 # watercolor-orie-xl: the original -orie- file was never found on HF. SUBSTITUTE (ADR-0014): the
 # ungated Pomological Watercolor Redmond SDXL LoRA (artificialguybr), saved under this name. A real,
-# SFW watercolor LoRA (~228 MB); leans botanical-illustration watercolor. Trigger stays "watercolor".
+# watercolor LoRA (~228 MB); leans botanical-illustration watercolor. Trigger stays "watercolor".
 loras|watercolor-orie-xl.safetensors|https://huggingface.co/artificialguybr/pomological-watercolor-redmond-lora-for-sd-xl/resolve/main/PomologicalWatercolorRedmond.safetensors|-|200
 loras|animelora-sdxl.safetensors|https://civitai.com/api/download/models/140052|-|100
 loras|StoryBookRedmond-KidsRedmAF.safetensors|https://huggingface.co/artificialguybr/StoryBookRedmond/resolve/main/StoryBookRedmond-KidsRedmAF.safetensors|-|400
@@ -60,7 +60,7 @@ loras|Ukiyo-e-Art-XL.safetensors|https://civitai.com/api/download/models/154278|
 loras|CLAYMATE-v2-sdxl.safetensors|https://huggingface.co/AI2lab/SDXL-loras/resolve/main/CLAYMATE_V2.03_.safetensors|https://huggingface.co/nerualdreming/Best_LoRas_Mar24/resolve/main/CLAYMATE_V2.03_.safetensors|600
 #
 # ---------------------------------------------------------------------------------------------
-# Curated SFW alternative base checkpoints (ADR-0014). Selectable via GET /checkpoints / the
+# Curated alternative base checkpoints (ADR-0014). Selectable via GET /checkpoints / the
 # `checkpoint` field on /generate (by friendly name or filename). All ungated Hugging Face repos;
 # full (non-distilled) SDXL, compatible with the stock sampler settings. ~6.9-7.1 GB each.
 # ---------------------------------------------------------------------------------------------
@@ -70,8 +70,8 @@ checkpoints|animagine-xl-3.1.safetensors|https://huggingface.co/cagliostrolab/an
 checkpoints|zavychromaxl_v100.safetensors|https://huggingface.co/misri/zavychromaxl_v100/resolve/main/zavychromaxl_v100.safetensors|-|6000
 #
 # ---------------------------------------------------------------------------------------------
-# Additional SFW style LoRAs (ADR-0014) — filenames/triggers/strengths in src/style-loras.ts.
-# All ungated Hugging Face repos, verified SFW SDXL LoRAs.
+# Additional style LoRAs (ADR-0014) — filenames/triggers/strengths in src/style-loras.ts.
+# All ungated Hugging Face repos, verified SDXL LoRAs.
 # ---------------------------------------------------------------------------------------------
 loras|LineAniRedmondV2-Lineart-LineAniAF.safetensors|https://huggingface.co/artificialguybr/LineAniRedmond-LinearMangaSDXL-V2/resolve/main/LineAniRedmondV2-Lineart-LineAniAF.safetensors|-|100
 loras|ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors|https://huggingface.co/artificialguybr/ColoringBookRedmond-V2/resolve/main/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors|-|100
@@ -85,7 +85,7 @@ loras|PS1Redmond-PS1Game-Playstation1Graphics.safetensors|https://huggingface.co
 loras|anime-nouveau-xl.safetensors|https://huggingface.co/Linaqruf/anime-nouveau-xl-lora/resolve/main/anime-nouveau-xl.safetensors|-|25
 #
 # ---------------------------------------------------------------------------------------------
-# Popular SFW checkpoints from Civitai (ADR-0016). Primary = Civitai (needs the API key, ADR-0013);
+# Popular checkpoints from Civitai (ADR-0016). Primary = Civitai (needs the API key, ADR-0013);
 # no ungated HF mirror for most. Version-pinned modelVersionId in each URL. Full SDXL 1.0.
 # ---------------------------------------------------------------------------------------------
 checkpoints|dreamshaperXL_alpha2Xl10.safetensors|https://civitai.com/api/download/models/126688|https://huggingface.co/Lykon/dreamshaper-xl-1-0/resolve/main/DreamShaperXL_Turbo_V2-SFW.safetensors|6000
@@ -96,7 +96,7 @@ checkpoints|samaritan3dCartoon_v40SDXL.safetensors|https://civitai.com/api/downl
 checkpoints|starlightXLAnimated_v3.safetensors|https://civitai.com/api/download/models/182077|-|6000
 #
 # ---------------------------------------------------------------------------------------------
-# More SFW style LoRAs from Civitai (ADR-0016). Filenames/triggers/strengths in src/style-loras.ts.
+# More style LoRAs from Civitai (ADR-0016). Filenames/triggers/strengths in src/style-loras.ts.
 # ---------------------------------------------------------------------------------------------
 loras|Zen_Ink_Wash_Sumi-e.safetensors|https://civitai.com/api/download/models/724876|-|150
 loras|F2D-000003.safetensors|https://civitai.com/api/download/models/335464|-|150

@@ -233,11 +233,8 @@
         </div>
       </div>
 
-      <label for="animModel">Model</label>
-      <select id="animModel">
-        <option value="wan-5b" selected>Wan 2.2 5B — richer, slower (1280×704 @ 24fps)</option>
-        <option value="ltxv">LTX-Video 2B — faster, lighter (768×512 @ 24fps)</option>
-      </select>
+      <label for="animModel">Model <span class="hint">(installed image-to-video models)</span></label>
+      <select id="animModel"><option value="">(loading…)</option></select>
 
       <label for="animPrompt">Prompt <span class="hint">(required — how it should move)</span></label>
       <textarea id="animPrompt" placeholder="the scene comes to life, gentle camera push-in"></textarea>
@@ -424,18 +421,22 @@
       }
     }
 
-    // Reflect image-to-video readiness from /health's `wan` block. Disable Animate (with a clear
-    // reason) until all three Wan model files are present on the ComfyUI host. Two distinct not-ready
-    // cases: ComfyUI is unreachable (a connectivity problem — the model check couldn't even run, so
-    // `missing` carries the "comfyui-unreachable" sentinel), versus ComfyUI is up but the model files
-    // are genuinely absent. They need opposite fixes, so never send the "install a model" advice when
-    // the real problem is that ComfyUI is down.
+    // Reflect image-to-video readiness from /health. Fill the Model picker from the live-discovered
+    // models, and disable Animate (with a clear reason) until the host can actually animate. Distinct
+    // not-ready cases, each needing a different fix: ComfyUI unreachable (connectivity — the probes
+    // couldn't run, so `missing` carries the "comfyui-unreachable" sentinel); no diffusion model
+    // installed ("diffusion-model" sentinel); or the shared Wan text-encoder/VAE absent. Never give the
+    // "install a model" advice when the real problem is that ComfyUI is down.
     function populateAnim(h) {
       const animStatus = $("animStatus");
       const wan = h && h.wan;
+      const models = (h && Array.isArray(h.videoModels)) ? h.videoModels : [];
+      populateAnimModels(models);
       if (wan && wan.ready) {
         animStatus.className = "status ok";
-        animStatus.textContent = "Video model ready (Wan 2.2 TI2V 5B).";
+        animStatus.textContent = models.length > 1
+          ? ("Video model ready — " + models.length + " installed, pick one above.")
+          : "Video model ready.";
         $("animGo").disabled = false;
         return;
       }
@@ -447,9 +448,53 @@
           " — is it running? Video-model status is unknown until ComfyUI is reachable.";
         return;
       }
-      const list = missing.length ? missing.join(", ") : "unknown";
-      animStatus.textContent = "Video model NOT installed — run scripts/fetch-wan22-models.ts, " +
-        "then restart ComfyUI. Missing: " + list;
+      if (missing.indexOf("diffusion-model") !== -1) {
+        animStatus.textContent = "No image-to-video model installed — add a .safetensors or .gguf to " +
+          "ComfyUI's models/diffusion_models/ (a subfolder is fine), then restart ComfyUI.";
+        return;
+      }
+      animStatus.textContent = "Video support incomplete — run scripts/fetch-wan22-models.ts, then " +
+        "restart ComfyUI. Missing: " + (missing.length ? missing.join(", ") : "unknown");
+    }
+
+    // Build the video Model picker from the live-discovered diffusion models (ADR-0021), grouped by
+    // subfolder like the checkpoint picker. The option VALUE is the exact ComfyUI name (with any
+    // subfolder prefix), sent as `diffusionModel`; the label shows the clean basename. Nothing is
+    // hardcoded — the whole list comes from /health, so no model name lives in this client.
+    function populateAnimModels(models) {
+      const sel = $("animModel");
+      const prev = sel.value;
+      const frag = document.createDocumentFragment();
+      if (!models.length) {
+        const opt = document.createElement("option");
+        opt.value = ""; opt.textContent = "(none installed)";
+        frag.appendChild(opt);
+        sel.replaceChildren(frag);
+        sel.disabled = true;
+        return;
+      }
+      const groups = new Map(); // folder label -> [full names], first-seen order
+      for (const name of models) {
+        const slash = name.lastIndexOf("/");
+        const label = slash === -1 ? "Installed" : name.slice(0, slash);
+        if (!groups.has(label)) groups.set(label, []);
+        groups.get(label).push(name);
+      }
+      for (const [label, names] of groups) {
+        const g = document.createElement("optgroup");
+        g.label = label;
+        for (const name of names) {
+          const slash = name.lastIndexOf("/");
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = slash === -1 ? name : name.slice(slash + 1);
+          g.appendChild(opt);
+        }
+        frag.appendChild(g);
+      }
+      sel.replaceChildren(frag);
+      sel.disabled = false;
+      if (prev) sel.value = prev; // keep a prior pick across refreshes when it's still installed
     }
 
     // Enable the Upscale control only when ComfyUI has an upscale model installed. The model dropdown
@@ -502,7 +547,7 @@
       const frag = document.createDocumentFragment();
       if (installed.length) {
         // Group installed checkpoints by their subfolder so a split models dir reads as sections.
-        // ComfyUI reports each name relative to its root, so "s/foo.safetensors" groups under "s"
+        // ComfyUI reports each name relative to its root, so "sub/foo.safetensors" groups under "sub"
         // showing just "foo.safetensors"; a bare name groups under "Installed" (ADR-0019). The
         // option VALUE stays the full name ComfyUI reported (that's what /generate needs).
         const groups = new Map(); // folder label -> [full names], in first-seen order
@@ -940,8 +985,8 @@
       if (!prompt) { showAnimError("Prompt is required."); return; }
 
       const body = { image: animImageB64, prompt: prompt };
-      const model = $("animModel").value;
-      if (model && model !== "wan-5b") body.model = model;
+      const diffusionModel = $("animModel").value;
+      if (diffusionModel) body.diffusionModel = diffusionModel;
       const neg = $("animNegative").value.trim();
       if (neg) body.negativePrompt = neg;
       const framesRaw = $("animFrames").value.trim();

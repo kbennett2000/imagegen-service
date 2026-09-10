@@ -1,10 +1,31 @@
 # Handoff
 
 ## Current state
+**Discover video models live; keep model names out of the repo (ADR-0021, branch
+`feat/discover-video-models`, PR open for review).** The video Model dropdown was a hardcoded
+two-entry registry and the repo baked in video-model filenames — so a user-installed model never
+appeared, and adding one meant committing its name (unacceptable for private/experimental models).
+Now the picker is built from ComfyUI's live inventory: `listDiffusionModels` (engine) unions
+`UNETLoader` (.safetensors) + `UnetLoaderGGUF` (.gguf); `/health` returns `videoModels`; the UI groups
+them by a subfolder (clean basename shown, exact name as the value). `POST /animate` takes
+`diffusionModel` (the exact ComfyUI name; path-safety validated, prefix allowed) — absent => first
+installed. `animateImage` renders the Wan i2v graph then sets the diffusion loader node to
+`UnetLoaderGGUF` for a `.gguf` file or `UNETLoader` otherwise. Preflight now checks the shared Wan
+text-encoder/VAE + that ≥1 model exists; a missing model yields a **name-free** error. Legacy `model`
+(ltxv) path unchanged. **No model name is compiled into the client, code, template, or tests** (tests
+use neutral placeholders); names flow ComfyUI → /health → browser at runtime only. `config.json` is
+gitignored. Tests: 178 pass (+ GGUF/discovery cases), tsc clean. Repo scrubbed of model names and of
+subfolder/content labels: no installed model name is tracked, and comments/docs/tests use neutral
+subfolder placeholders. Two FUNCTIONAL strings intentionally remain and must NOT be "cleaned" —
+a content-rating query param in `scripts/fetch-missing-checkpoints.sh` (it *excludes* restricted
+results — removing it would let them through) and a token inside a real Hugging Face download URL in
+`install/models.manifest` (line 91; editing it breaks that download).
+
+### Prior — Video-model subfolder reconciliation (ADR-0020)
 **Video-model subfolder reconciliation (ADR-0020, branch
-`feat/video-model-subfolder-reconciliation`, PR open for review).** Extends ADR-0019's basename
+`feat/video-model-subfolder-reconciliation`, merged).** Extends ADR-0019's basename
 reconciliation from the checkpoint path to the video path so the *supported* video models (`wan-5b`,
-`ltxv`) are recognized and load from either drive and from `s/`/`ns/` subfolders — matching the image
+`ltxv`) are recognized and load from either drive and from subfolders — matching the image
 experience. Before this, `videoModelsMissing` matched by exact filename and the workflow renderers
 injected bare names, so a Wan/LTX file in a subfolder read "not installed" and failed to load.
 Fix: `src/checkpoints.ts` exposes generic aliases (`modelBasename`/`modelInstalled`/
@@ -20,7 +41,7 @@ ADR-0017.
 ### Prior — Checkpoint subfolder groups (ADR-0019)
 **Checkpoint subfolder groups + basename reconciliation (ADR-0019, branch
 `feat/checkpoint-subfolder-groups`, PR open for review).** ComfyUI lists checkpoints relative to each
-configured root, so a subfoldered model reads as `s/foo.safetensors` while the catalog and workflow
+configured root, so a subfoldered model reads as `sub/foo.safetensors` while the catalog and workflow
 templates use bare names — which made every subfoldered model show "not installed" and fail to load
 (default and refiner included). Fix: `src/checkpoints.ts` gains `checkpointBasename`,
 `checkpointInstalled`, `reconcileCheckpoint` (pure); `generateImage` reconciles every
@@ -29,7 +50,7 @@ templates use bare names — which made every subfoldered model show "not instal
 ComfyUI advertises; `src/ui.html` groups the installed picker into one `<optgroup>` per subfolder
 (clean basename shown, full name as the option value). Tolerates flat **and** subfoldered layouts.
 **Operator step to see grouping live:** point `extra_model_paths.yaml` `checkpoints:` at the parent
-`checkpoints/` (so ComfyUI recurses and prefixes `s/…`, `ns/…`) and restart ComfyUI — this reverses
+`checkpoints/` (so ComfyUI recurses and prefixes `sub/…`, `alt/…`) and restart ComfyUI — this reverses
 the flat-name stopgap that had listed the leaf subfolders as roots. Tests: 170 pass, tsc clean.
 
 ### Prior — Shared-flock GPU tenancy lease (ADR-0012)
@@ -45,22 +66,22 @@ non-root service user can create the lockfile — `/run` needs root and would si
 stranding VRAM. Tests: `test/gpu-lease.test.ts`. (Originally PR #26, which merged onto the wrong base
 and never reached master; re-landed here.)
 
-### Prior — Popular SFW models from Civitai (ADR-0016)
-**Popular SFW models from Civitai (ADR-0016, PR open for review; off master).** Extends the catalog
+### Prior — Popular models from Civitai (ADR-0016)
+**Popular models from Civitai (ADR-0016, PR open for review; off master).** Extends the catalog
 with 6 checkpoints (`dreamshaper`, `realcartoon`, `nightvision`, `colorful`, `samaritan3d`,
 `starlight`) and 11 style LoRAs (ink wash, flat vector, travel poster, sticker, gouache, charcoal,
-art deco, risograph, cel shading, woodcut, blueprint) — all verified SFW SDXL 1.0 on Civitai
-(`nsfw:false`, version-pinned modelVersionIds). **Styles now 33, checkpoints 10.** Pure catalog data
+art deco, risograph, cel shading, woodcut, blueprint) — all verified SDXL 1.0 on Civitai
+(clean rating, version-pinned modelVersionIds). **Styles now 33, checkpoints 10.** Pure catalog data
 (manifest + `CHECKPOINTS`/`STYLE_LORAS`); no engine change. Civitai primaries need the API key
 (ADR-0013); one blueprint LoRA's dest filename is space-free to survive the installer. Tests: 149 pass.
 
 ### Prior — Image model catalog + checkpoint selection (ADR-0014)
-**Image model catalog + checkpoint selection — Slice 2 of the "wide variety of SFW models" effort
-(ADR-0014, merged).** Adds a curated set of SFW
+**Image model catalog + checkpoint selection — Slice 2 of the "wide variety of models" effort
+(ADR-0014, merged).** Adds a curated set of
 base checkpoints and 10 more style LoRAs, plus the machinery to pick and discover them.
 
 - **Checkpoint catalog** (`src/checkpoints.ts`): friendly-name → filename map (like `style-loras.ts`).
-  4 full SFW SDXL checkpoints — `realvisxl`, `juggernaut`, `animagine`, `zavychroma` (all ungated HF,
+  4 full SDXL checkpoints — `realvisxl`, `juggernaut`, `animagine`, `zavychroma` (all ungated HF,
   ~7 GB, compatible with the stock cfg-7/25-step sampler). **Turbo/Lightning deliberately excluded** —
   they need ~4-8 steps/low cfg the current tiers don't provide.
 - **Selection**: `/generate`'s `checkpoint` accepts a catalog **name** OR a raw filename
@@ -70,7 +91,7 @@ base checkpoints and 10 more style LoRAs, plus the machinery to pick and discove
   `{name,file,description,installed}` from the live object_info probe; `/health` gains
   `checkpointsInstalled`.
 - **10 new style LoRAs** in `STYLE_LORAS`: line art, coloring book, papercut, isometric, stained
-  glass, embroidery, amigurumi, vaporwave, low-poly, art nouveau (all ungated HF, verified SFW). Also
+  glass, embroidery, amigurumi, vaporwave, low-poly, art nouveau (all ungated HF, verified). Also
   **fixed the long-broken `watercolour`** source (was `-|-`, now the ungated Pomological Watercolor
   LoRA saved under `watercolor-orie-xl.safetensors`). Styles total **22**.
 - **Manifest**: 4 checkpoint + 11 lora source lines added/fixed in `install/models.manifest` (all HF
@@ -83,7 +104,7 @@ base checkpoints and 10 more style LoRAs, plus the machinery to pick and discove
 - **Next:** Slice 3 = multi-model video dispatch + a 2nd video model (ADR-0015).
 
 ### Prior — Civitai-authenticated model downloads (ADR-0013)
-**Civitai-authenticated model downloads — Slice 1 of the "wide variety of SFW models" effort
+**Civitai-authenticated model downloads — Slice 1 of the "wide variety of models" effort
 (ADR-0013, PR open for review).** Foundation only: the download path can now authenticate to
 Civitai's gated endpoints, so later slices can add gated checkpoints/LoRAs/video models. **No `src/`
 runtime behavior changed — the token is a download-time secret.**

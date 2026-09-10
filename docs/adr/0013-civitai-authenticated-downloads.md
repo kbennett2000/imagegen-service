@@ -14,7 +14,7 @@ frequently login-gated: an unauthenticated request returns an HTML login page, w
 existing safetensors verification, falls through to the ungated Hugging Face mirror, and — where no
 mirror exists — the style degrades to prompt-only.
 
-To broaden the catalog with a wide variety of SFW checkpoints, LoRAs, and video models (ADR-0014,
+To broaden the catalog with a wide variety of checkpoints, LoRAs, and video models (ADR-0014,
 ADR-0015), many of which live only behind Civitai's gate, the download path needs to authenticate
 with a user-supplied Civitai API key. This ADR adds that, as the foundation the catalog slices build
 on. It changes nothing about the running service — the token is a download-time secret only.
