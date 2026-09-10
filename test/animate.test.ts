@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
 import type { Config } from "../src/config.ts";
-import { animateImage, wanModelsMissing } from "../src/engine.ts";
+import { animateImage, formatVideoExecutionError, wanModelsMissing } from "../src/engine.ts";
 import { createServer } from "../src/server.ts";
 import { MockComfy } from "./helpers/mock-comfy.ts";
 
@@ -134,6 +134,32 @@ test("animateImage: flat (unprefixed) installs are still injected verbatim", asy
   const graph = mock.submitted[0]!.graph;
   assert.equal(graph["37"].inputs.unet_name, "wan2.2_ti2v_5B_fp16.safetensors");
   assert.equal(graph["39"].inputs.vae_name, "wan2.2_vae.safetensors");
+});
+
+// ---- architecture-incompatibility error translation (ADR-0022) ---------------------------
+
+test("formatVideoExecutionError: a tensor-size mismatch reads as an architecture message", () => {
+  const mismatch = {
+    status_str: "error",
+    messages: [["execution_error", {
+      node_id: "3", node_type: "KSampler", exception_type: "RuntimeError",
+      exception_message: "The size of tensor a (48) must match the size of tensor b (16) at non-singleton dimension 1",
+    }]],
+  };
+  const msg = formatVideoExecutionError(mismatch);
+  assert.match(msg, /isn't compatible with the built-in Wan 2.2 TI2V workflow/);
+  assert.match(msg, /Original error:/);
+
+  // An unrelated execution error is passed through unchanged (still surfaced verbatim).
+  const oom = {
+    status_str: "error",
+    messages: [["execution_error", {
+      node_id: "3", node_type: "KSampler", exception_type: "RuntimeError",
+      exception_message: "CUDA out of memory",
+    }]],
+  };
+  assert.doesNotMatch(formatVideoExecutionError(oom), /isn't compatible/);
+  assert.match(formatVideoExecutionError(oom), /CUDA out of memory/);
 });
 
 // ---- live discovery of installed video models (ADR-0021) ---------------------------------

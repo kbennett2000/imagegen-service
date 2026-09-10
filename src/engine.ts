@@ -792,6 +792,24 @@ export function formatComfyExecutionError(status: any): string {
   return `ComfyUI execution error: ${JSON.stringify(status).slice(0, 500)}`;
 }
 
+// Video-path error formatter (ADR-0022). A tensor-size mismatch at the sampler means the chosen model
+// is a different ARCHITECTURE than the built-in Wan 2.2 TI2V workflow drives (e.g. a Wan 2.1 / T2V /
+// Hunyuan model — different latent channel count + VAE + graph). Translate that ComfyUI RuntimeError
+// into a plain, actionable message instead of a raw tensor error, while still surfacing the original.
+export function formatVideoExecutionError(status: any): string {
+  const raw = formatComfyExecutionError(status);
+  if (/size of tensor .* must match the size of tensor .* at non-singleton dimension/i.test(raw)) {
+    return (
+      "This model isn't compatible with the built-in Wan 2.2 TI2V workflow — it looks like a " +
+      "different video architecture (its latent size doesn't match). The service currently drives " +
+      "Wan 2.2 TI2V 5B (48-channel) models; support for other families (Wan 2.1 I2V, T2V, Hunyuan) " +
+      "is planned. Original error: " +
+      raw
+    );
+  }
+  return raw;
+}
+
 // Scan a /history entry's outputs for the first produced file. Wan ends in SaveVideo, whose output
 // key varies by ComfyUI build (images / gifs / videos), so take the first output array whose first
 // element carries a `filename` rather than assuming an `images` array under a fixed node id.
@@ -996,7 +1014,7 @@ export async function animateImage(
       const entry = hist[promptId];
       if (!entry) continue;
       if (entry.status?.status_str === "error") {
-        return { ok: false, error: formatComfyExecutionError(entry.status) };
+        return { ok: false, error: formatVideoExecutionError(entry.status) };
       }
       out = findOutputFile(entry);
       if (out) break;

@@ -21,6 +21,18 @@ a content-rating query param in `scripts/fetch-missing-checkpoints.sh` (it *excl
 results — removing it would let them through) and a token inside a real Hugging Face download URL in
 `install/models.manifest` (line 91; editing it breaks that download).
 
+**Follow-up finding — multiple video architectures (ADR-0022, Phase 0 on this branch).** ADR-0021's
+"list every diffusion model" over-promised: a user's `diffusion_models/` holds models from several
+incompatible architectures (Wan 2.2 TI2V 5B = 48 latent ch, Wan 2.1 I2V = 36, Wan/2.2 T2V = 16,
+Hunyuan/SkyReels = other), but the service ships ONE workflow (Wan 2.2 TI2V). Selecting a non-48-ch
+model fails inside ComfyUI at the sampler (`tensor a (48) must match tensor b (16)`). Also VRAM-bound:
+on a 12 GB card 14B fp16 models don't fit (GGUF-Q4/fp8 only). **Phase 0 landed here:**
+`formatVideoExecutionError` translates that sampler tensor-mismatch into a plain "model needs a
+workflow the service doesn't have yet" message (test added); UI notes the Wan 2.2 TI2V support
+boundary. **Roadmap (ADR-0022, each phase GPU-verified):** (1) workflow registry + architecture
+detection/routing + Wan 2.1 I2V (GGUF-first, fits 12 GB, unlocks the most models); (2) Wan T2V;
+(3) Hunyuan/SkyReels. Not yet built.
+
 ### Prior — Video-model subfolder reconciliation (ADR-0020)
 **Video-model subfolder reconciliation (ADR-0020, branch
 `feat/video-model-subfolder-reconciliation`, merged).** Extends ADR-0019's basename
