@@ -151,6 +151,14 @@ npx tsx scripts/fetch-wan22-models.ts        # resumable; --models-root <dir> to
 curl -s localhost:8189/health   # wan.ready should be true, wan.missing empty
 ```
 
+To fetch **every** image-to-video model at once (Wan 2.2 + LTX-Video) with the same drive defaults as
+the checkpoint fetcher — downloads to the second drive, searches both drives so nothing is
+re-fetched (ADR-0017) — use the unified script instead:
+
+```bash
+npx tsx scripts/fetch-missing-video-models.ts   # --models-root <dir> / --extra-root <dir> / --dry-run
+```
+
 The three files (from the official Comfy-Org repackage) land in the right subdirs:
 
 | File | Subdir | Size |
