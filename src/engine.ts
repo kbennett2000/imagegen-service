@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { reconcileCheckpoint } from "./checkpoints.js";
 import { ensureTrigger, lookupStyleLora, type StyleLora } from "./style-loras.js";
 import {
   getVideoModel,
@@ -577,6 +578,22 @@ export async function generateImage(
     for (const id of ["3", "14"]) setNodeSeed(graph, id, seed);
     setNodeSize(graph, "5", params.width, params.height); // EmptyLatentImage (both workflows)
     setNodeCheckpoint(graph, "4", params.checkpoint); // base checkpoint override (both workflows)
+    // Reconcile every checkpoint node against what ComfyUI actually reports, so a subfoldered install
+    // (e.g. "s/sd_xl_base_1.0.safetensors") is matched by basename and the exact ckpt_name is injected
+    // — for the base node "4" (override or template default) and the refiner node "11" alike. Best
+    // effort: if the list can't be fetched, leave each ckpt_name as-is and let ComfyUI report (ADR-0019).
+    let availableCheckpoints: string[] = [];
+    try {
+      availableCheckpoints = await listCheckpoints(base, fetchFn);
+    } catch {
+      /* leave graph checkpoint nodes untouched — ComfyUI will still error cleanly if a file is absent */
+    }
+    for (const id of ["4", "11"]) {
+      const node = graph[id];
+      if (node?.class_type === "CheckpointLoaderSimple" && typeof node.inputs.ckpt_name === "string") {
+        node.inputs.ckpt_name = reconcileCheckpoint(node.inputs.ckpt_name, availableCheckpoints);
+      }
+    }
     if (tier.steps != null && graph["3"] && "steps" in graph["3"].inputs) {
       graph["3"].inputs.steps = tier.steps; // base-sampler step override only
     }

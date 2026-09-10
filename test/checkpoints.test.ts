@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { CHECKPOINTS, lookupCheckpoint, resolveCheckpoint } from "../src/checkpoints.ts";
+import {
+  CHECKPOINTS,
+  checkpointBasename,
+  checkpointInstalled,
+  lookupCheckpoint,
+  reconcileCheckpoint,
+  resolveCheckpoint,
+} from "../src/checkpoints.ts";
 
 test("resolveCheckpoint: an empty/absent value resolves to undefined (keep template default)", () => {
   assert.equal(resolveCheckpoint(undefined), undefined);
@@ -38,4 +45,37 @@ test("lookupCheckpoint: catalog entries are well-formed (name/file/description p
 test("lookupCheckpoint: unknown names return undefined", () => {
   assert.equal(lookupCheckpoint("definitely-not-a-catalog-name"), undefined);
   assert.equal(lookupCheckpoint(""), undefined);
+});
+
+// --- subfolder reconciliation (ADR-0019) --------------------------------------------------
+
+test("checkpointBasename: strips a forward-slash subfolder prefix, leaves bare names alone", () => {
+  assert.equal(checkpointBasename("s/foo.safetensors"), "foo.safetensors");
+  assert.equal(checkpointBasename("a/b/deep.safetensors"), "deep.safetensors");
+  assert.equal(checkpointBasename("foo.safetensors"), "foo.safetensors");
+  assert.equal(checkpointBasename(""), "");
+});
+
+test("checkpointInstalled: matches by basename so a subfoldered install counts", () => {
+  const available = ["s/animagine-xl-3.1.safetensors", "ns/other.safetensors"];
+  assert.equal(checkpointInstalled("animagine-xl-3.1.safetensors", available), true);
+  assert.equal(checkpointInstalled("other.safetensors", available), true);
+  assert.equal(checkpointInstalled("not-there.safetensors", available), false);
+  // A bare install still matches a bare catalog file (the flat, no-subfolder case).
+  assert.equal(checkpointInstalled("flat.safetensors", ["flat.safetensors"]), true);
+});
+
+test("reconcileCheckpoint: exact match wins, else basename match recovers the prefix", () => {
+  const available = ["s/sd_xl_base_1.0.safetensors", "ns/spicy.safetensors"];
+  // Bare desired -> the subfoldered name ComfyUI actually reports.
+  assert.equal(reconcileCheckpoint("sd_xl_base_1.0.safetensors", available), "s/sd_xl_base_1.0.safetensors");
+  // An exact hit is returned untouched.
+  assert.equal(reconcileCheckpoint("s/sd_xl_base_1.0.safetensors", available), "s/sd_xl_base_1.0.safetensors");
+});
+
+test("reconcileCheckpoint: unknown or unlistable -> desired unchanged (ComfyUI errors cleanly)", () => {
+  assert.equal(reconcileCheckpoint("missing.safetensors", ["s/foo.safetensors"]), "missing.safetensors");
+  assert.equal(reconcileCheckpoint("foo.safetensors", []), "foo.safetensors");
+  // Flat install: bare desired already matches exactly, no prefix invented.
+  assert.equal(reconcileCheckpoint("foo.safetensors", ["foo.safetensors"]), "foo.safetensors");
 });

@@ -326,6 +326,22 @@ test("no checkpoint override -> node 4 keeps the workflow template default", asy
   assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, "sd_xl_base_1.0.safetensors");
 });
 
+test("subfoldered install -> template default reconciled to the prefixed ckpt_name (ADR-0019)", async () => {
+  // ComfyUI reports checkpoints under an "s/" subfolder; the bare template default must be matched
+  // by basename and injected WITH the prefix, or the base checkpoint fails to load.
+  const mock = new MockComfy({ checkpoints: ["s/sd_xl_base_1.0.safetensors", "s/sd_xl_refiner_1.0.safetensors"] });
+  await generateImage(URL, { prompt: "x" }, mock.fetch);
+  assert.equal(mock.submitted[0]!.graph["4"].inputs.ckpt_name, "s/sd_xl_base_1.0.safetensors");
+});
+
+test("subfoldered install -> a bare override is reconciled to the prefixed name, refiner too (ADR-0019)", async () => {
+  const mock = new MockComfy({ checkpoints: ["ns/spicy.safetensors", "s/sd_xl_refiner_1.0.safetensors"] });
+  await generateImage(URL, { prompt: "x", quality: "high", checkpoint: "spicy.safetensors" }, mock.fetch);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["4"].inputs.ckpt_name, "ns/spicy.safetensors"); // base override -> prefixed
+  assert.equal(graph["11"].inputs.ckpt_name, "s/sd_xl_refiner_1.0.safetensors"); // refiner -> prefixed
+});
+
 test("checkpoint override composes with a LoRA style (node 20 still reads from node 4)", async () => {
   const mock = new MockComfy();
   await generateImage(URL, { prompt: "x", style: "anime", checkpoint: "custom.safetensors" }, mock.fetch);

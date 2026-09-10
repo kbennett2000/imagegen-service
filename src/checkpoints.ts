@@ -81,3 +81,34 @@ export function resolveCheckpoint(value?: string | null): string | undefined {
   if (!v) return undefined;
   return lookupCheckpoint(v)?.file ?? v;
 }
+
+// --- subfolder reconciliation (ADR-0019) --------------------------------------------------
+// ComfyUI lists each checkpoint relative to whichever configured root it was found under, so the
+// SAME file reads as "foo.safetensors" when it sits at a checkpoints root or "s/foo.safetensors"
+// when it sits in a subfolder of one. The catalog and the workflow templates always use bare
+// filenames, so the two must be reconciled by basename or every subfoldered model reads as "not
+// installed" and its ckpt_name fails to load.
+
+// The bare filename of a ComfyUI ckpt_name, dropping any forward-slash subfolder prefix
+// (e.g. "s/foo.safetensors" -> "foo.safetensors"). ComfyUI always uses "/" here, even on Windows.
+export function checkpointBasename(name: string): string {
+  const slash = name.lastIndexOf("/");
+  return slash === -1 ? name : name.slice(slash + 1);
+}
+
+// Is `file` (a bare catalog/template filename) installed among the names ComfyUI reports? Matched by
+// basename so a subfoldered install ("s/foo.safetensors") still counts as installed.
+export function checkpointInstalled(file: string, available: readonly string[]): boolean {
+  const base = checkpointBasename(file);
+  return available.some((a) => checkpointBasename(a) === base);
+}
+
+// Map a desired checkpoint (a bare filename from an override, the catalog, or a workflow template)
+// to the exact ckpt_name ComfyUI expects: an exact match wins; else the first entry sharing its
+// basename (recovering a subfolder prefix like "s/"); else the desired value unchanged, so a truly
+// absent model still yields ComfyUI's own clean "not found" rather than a silent swap.
+export function reconcileCheckpoint(desired: string, available: readonly string[]): string {
+  if (!desired || available.includes(desired)) return desired;
+  const base = checkpointBasename(desired);
+  return available.find((a) => checkpointBasename(a) === base) ?? desired;
+}
