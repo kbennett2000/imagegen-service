@@ -1,8 +1,26 @@
 # Handoff
 
 ## Current state
+**Discover video models live; keep model names out of the repo (ADR-0021, branch
+`feat/discover-video-models`, PR open for review).** The video Model dropdown was a hardcoded
+two-entry registry and the repo baked in video-model filenames — so a user-installed model never
+appeared, and adding one meant committing its name (unacceptable for private/experimental models).
+Now the picker is built from ComfyUI's live inventory: `listDiffusionModels` (engine) unions
+`UNETLoader` (.safetensors) + `UnetLoaderGGUF` (.gguf); `/health` returns `videoModels`; the UI groups
+them by `s/`/`ns/` subfolder (clean basename shown, exact name as the value). `POST /animate` takes
+`diffusionModel` (the exact ComfyUI name; path-safety validated, prefix allowed) — absent => first
+installed. `animateImage` renders the Wan i2v graph then sets the diffusion loader node to
+`UnetLoaderGGUF` for a `.gguf` file or `UNETLoader` otherwise. Preflight now checks the shared Wan
+text-encoder/VAE + that ≥1 model exists; a missing model yields a **name-free** error. Legacy `model`
+(ltxv) path unchanged. **No model name is compiled into the client, code, template, or tests** (tests
+use neutral placeholders); names flow ComfyUI → /health → browser at runtime only. `config.json` is
+gitignored. Tests: 178 pass (+ GGUF/discovery cases), tsc clean. Repo scrubbed — the specific model
+name appears nowhere tracked; residual "NSFW" strings are only a Civitai `nsfw=false` exclusion filter
+and ADR text describing the `s/`/`ns/` folder convention (no model named).
+
+### Prior — Video-model subfolder reconciliation (ADR-0020)
 **Video-model subfolder reconciliation (ADR-0020, branch
-`feat/video-model-subfolder-reconciliation`, PR open for review).** Extends ADR-0019's basename
+`feat/video-model-subfolder-reconciliation`, merged).** Extends ADR-0019's basename
 reconciliation from the checkpoint path to the video path so the *supported* video models (`wan-5b`,
 `ltxv`) are recognized and load from either drive and from `s/`/`ns/` subfolders — matching the image
 experience. Before this, `videoModelsMissing` matched by exact filename and the workflow renderers

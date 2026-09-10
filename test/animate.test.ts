@@ -73,14 +73,13 @@ test("animateImage: width/height/frames/fps flow into the graph (snapped by the 
   assert.equal(graph["57"].inputs.fps, 30);
 });
 
-test("animateImage: missing Wan models -> clean error, nothing submitted", async () => {
-  const mock = new MockComfy({ wanUnets: [] });
+test("animateImage: no diffusion model installed -> clean, name-free error, nothing submitted", async () => {
+  const mock = new MockComfy({ wanUnets: [] }); // no safetensors and (by default) no GGUF models
   const result = await animateImage(URL, { prompt: "p", image: B64_STILL }, mock.fetch);
   assert.equal(result.ok, false);
   const r = result as { ok: false; error: string };
-  assert.match(r.error, /not installed/);
-  assert.match(r.error, /wan2\.2_ti2v_5B_fp16\.safetensors/);
-  assert.match(r.error, /fetch-wan22-models/);
+  assert.match(r.error, /No image-to-video diffusion model is installed/);
+  assert.match(r.error, /models\/diffusion_models\//);
   assert.equal(mock.submitted.length, 0); // preflight failed before any submit
 });
 
@@ -135,6 +134,74 @@ test("animateImage: flat (unprefixed) installs are still injected verbatim", asy
   const graph = mock.submitted[0]!.graph;
   assert.equal(graph["37"].inputs.unet_name, "wan2.2_ti2v_5B_fp16.safetensors");
   assert.equal(graph["39"].inputs.vae_name, "wan2.2_vae.safetensors");
+});
+
+// ---- live discovery of installed video models (ADR-0021) ---------------------------------
+// Tests use neutral placeholder names on purpose: no model name is compiled into this repo.
+
+test("animateImage: the requested diffusion model is used; absent field falls back to the first", async () => {
+  const opts = {
+    outputFilename: (pid: string) => `${pid}.mp4`,
+    wanUnets: ["s/video-model-a.safetensors", "s/video-model-b.safetensors"],
+  };
+  const mockPick = new MockComfy(opts);
+  const picked = await animateImage(
+    URL,
+    { prompt: "p", image: B64_STILL, diffusionModel: "s/video-model-b.safetensors" },
+    mockPick.fetch,
+  );
+  assert.equal(picked.ok, true);
+  assert.equal(mockPick.submitted[0]!.graph["37"].inputs.unet_name, "s/video-model-b.safetensors");
+  assert.equal(mockPick.submitted[0]!.graph["37"].class_type, "UNETLoader");
+
+  const mockDefault = new MockComfy(opts);
+  await animateImage(URL, { prompt: "p", image: B64_STILL }, mockDefault.fetch); // no diffusionModel
+  assert.equal(mockDefault.submitted[0]!.graph["37"].inputs.unet_name, "s/video-model-a.safetensors");
+});
+
+test("animateImage: a .gguf model loads through UnetLoaderGGUF (ADR-0021)", async () => {
+  const mock = new MockComfy({
+    outputFilename: (pid) => `${pid}.mp4`,
+    wanUnets: [], // no plain safetensors diffusion model
+    wanGgufUnets: ["ns/video-model-a.gguf"],
+  });
+  const result = await animateImage(
+    URL,
+    { prompt: "p", image: B64_STILL, diffusionModel: "ns/video-model-a.gguf" },
+    mock.fetch,
+  );
+  assert.equal(result.ok, true);
+  const node = mock.submitted[0]!.graph["37"];
+  assert.equal(node.class_type, "UnetLoaderGGUF");
+  assert.equal(node.inputs.unet_name, "ns/video-model-a.gguf");
+  assert.equal(node.inputs.weight_dtype, undefined); // the GGUF loader takes only unet_name
+});
+
+test("animateImage: a requested model that isn't installed -> clean error, nothing submitted", async () => {
+  const mock = new MockComfy({ wanUnets: ["s/video-model-a.safetensors"] });
+  const r = (await animateImage(
+    URL,
+    { prompt: "p", image: B64_STILL, diffusionModel: "not-there.safetensors" },
+    mock.fetch,
+  )) as { ok: false; error: string };
+  assert.equal(r.ok, false);
+  assert.match(r.error, /not installed/);
+  assert.equal(mock.submitted.length, 0);
+});
+
+test("GET /health lists installed video models (safetensors + gguf) with nothing hardcoded", async () => {
+  const mock = new MockComfy({
+    wanUnets: ["s/video-model-a.safetensors"],
+    wanGgufUnets: ["ns/video-model-b.gguf"],
+  });
+  const svc = await startService(mock);
+  try {
+    const body = (await (await fetch(`${svc.base}/health`)).json()) as any;
+    assert.deepEqual(body.videoModels, ["s/video-model-a.safetensors", "ns/video-model-b.gguf"]);
+    assert.equal(body.wan.ready, true);
+  } finally {
+    await svc.close();
+  }
 });
 
 // ---- server: POST /animate ---------------------------------------------------------------
@@ -207,7 +274,7 @@ test("POST /animate -> 422 on out-of-range frames", async () => {
   }
 });
 
-test("POST /animate -> 503 when the Wan models are not installed", async () => {
+test("POST /animate -> 503 when no diffusion model is installed", async () => {
   const mock = new MockComfy({ wanUnets: [] });
   const svc = await startService(mock);
   try {
@@ -217,7 +284,7 @@ test("POST /animate -> 503 when the Wan models are not installed", async () => {
       body: JSON.stringify({ prompt: "p", image: B64_STILL }),
     });
     assert.equal(res.status, 503);
-    assert.match(((await res.json()) as any).error, /not installed/);
+    assert.match(((await res.json()) as any).error, /No image-to-video diffusion model is installed/);
   } finally {
     await svc.close();
   }
