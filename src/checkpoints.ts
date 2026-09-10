@@ -112,3 +112,10 @@ export function reconcileCheckpoint(desired: string, available: readonly string[
   const base = checkpointBasename(desired);
   return available.find((a) => checkpointBasename(a) === base) ?? desired;
 }
+
+// The three helpers above are not checkpoint-specific — the basename logic works for any ComfyUI
+// model dir (diffusion_models, text_encoders, vae, ...). ADR-0020 reuses them for the video path;
+// these generic aliases let that code read for what it is rather than borrowing "checkpoint" names.
+export const modelBasename = checkpointBasename;
+export const modelInstalled = checkpointInstalled;
+export const reconcileModelName = reconcileCheckpoint;

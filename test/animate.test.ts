@@ -101,6 +101,42 @@ test("wanModelsMissing: [] when all present, lists the absent files otherwise", 
   assert.match(missing[0]!, /wan2\.2_vae\.safetensors/);
 });
 
+// ---- subfolder tolerance (ADR-0020) ------------------------------------------------------
+
+test("wanModelsMissing: subfoldered (s/, ns/) installs still read present (basename match)", async () => {
+  const sub = new MockComfy({
+    wanUnets: ["s/wan2.2_ti2v_5B_fp16.safetensors"],
+    wanClips: ["ns/umt5_xxl_fp8_e4m3fn_scaled.safetensors"],
+    wanVaes: ["s/wan2.2_vae.safetensors"],
+  });
+  assert.deepEqual(await wanModelsMissing(URL, sub.fetch), []);
+});
+
+test("animateImage: subfoldered model files load by their exact prefixed name (ADR-0020)", async () => {
+  const mock = new MockComfy({
+    outputFilename: (pid) => `${pid}.mp4`,
+    wanUnets: ["s/wan2.2_ti2v_5B_fp16.safetensors"],
+    wanClips: ["ns/umt5_xxl_fp8_e4m3fn_scaled.safetensors"],
+    wanVaes: ["s/wan2.2_vae.safetensors"],
+  });
+  const result = await animateImage(URL, { prompt: "p", image: B64_STILL }, mock.fetch);
+  assert.equal(result.ok, true); // preflight passes by basename, nothing "not installed"
+  // The submitted graph asks ComfyUI for the exact prefixed names it advertises, not the bare ones.
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["37"].inputs.unet_name, "s/wan2.2_ti2v_5B_fp16.safetensors");
+  assert.equal(graph["38"].inputs.clip_name, "ns/umt5_xxl_fp8_e4m3fn_scaled.safetensors");
+  assert.equal(graph["39"].inputs.vae_name, "s/wan2.2_vae.safetensors");
+});
+
+test("animateImage: flat (unprefixed) installs are still injected verbatim", async () => {
+  const mock = new MockComfy({ outputFilename: (pid) => `${pid}.mp4` });
+  const result = await animateImage(URL, { prompt: "p", image: B64_STILL }, mock.fetch);
+  assert.equal(result.ok, true);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["37"].inputs.unet_name, "wan2.2_ti2v_5B_fp16.safetensors");
+  assert.equal(graph["39"].inputs.vae_name, "wan2.2_vae.safetensors");
+});
+
 // ---- server: POST /animate ---------------------------------------------------------------
 
 test("POST /animate -> 200 video/mp4 with the produced bytes", async () => {
@@ -261,6 +297,19 @@ test("animateImage: model=ltxv with its files missing -> clean error naming the 
   assert.match(r.error, /ltx-video-2b-v0\.9\.5\.safetensors/);
   assert.match(r.error, /fetch-ltxv-models/);
   assert.equal(mock.submitted.length, 0);
+});
+
+test("animateImage: model=ltxv also tolerates subfoldered files (ADR-0020)", async () => {
+  const mock = new MockComfy({
+    outputFilename: (pid) => `${pid}.mp4`,
+    checkpoints: ["s/ltx-video-2b-v0.9.5.safetensors"],
+    wanClips: ["ns/t5xxl_fp8_e4m3fn_scaled.safetensors"],
+  });
+  const result = await animateImage(URL, { prompt: "p", image: B64_STILL, model: "ltxv" }, mock.fetch);
+  assert.equal(result.ok, true);
+  const graph = mock.submitted[0]!.graph;
+  assert.equal(graph["44"].inputs.ckpt_name, "s/ltx-video-2b-v0.9.5.safetensors");
+  assert.equal(graph["38"].inputs.clip_name, "ns/t5xxl_fp8_e4m3fn_scaled.safetensors");
 });
 
 test("POST /animate: model=ltxv -> 200 video/mp4", async () => {
