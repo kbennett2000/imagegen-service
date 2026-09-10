@@ -13,8 +13,12 @@ import {
   generateImage,
   probeComfy,
   videoReadiness,
+  VIDEO_PIPELINES,
+  isVideoPipeline,
+  pipelineNeedsImage,
   QUALITIES,
   type AnimateParams,
+  type VideoPipeline,
   type FetchFn,
   type GenerateParams,
   type Quality,
@@ -25,6 +29,7 @@ import { CHECKPOINTS, checkpointInstalled, reconcileCheckpoint, resolveCheckpoin
 import { ffmpegAvailable as ffmpegAvailableDefault, stitchVideos as stitchVideosDefault, type StitchResult } from "./stitch.js";
 import { MAX_FRAMES } from "./wan-workflow.js";
 import { ANIMATE_MODELS, isAnimateModel } from "./video-models.js";
+import { detectPipeline } from "./model-arch.js";
 
 // CreateVideo caps fps at 120.
 const MAX_FPS = 120;
@@ -218,8 +223,18 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   if (typeof b.prompt !== "string" || b.prompt.trim() === "") {
     return { error: "`prompt` is required and must be a non-empty string" };
   }
-  if (typeof b.image !== "string" || b.image === "") {
-    return { error: "`image` is required and must be a non-empty base64 string" };
+  // Validate the pipeline early — it decides whether an input image is required (text-to-video
+  // generates from the prompt alone, ADR-0022).
+  if (b.pipeline !== undefined && !isVideoPipeline(b.pipeline)) {
+    return { error: `\`pipeline\` must be one of: ${VIDEO_PIPELINES.join(", ")}` };
+  }
+  const pipeline = isVideoPipeline(b.pipeline) ? b.pipeline : undefined;
+  if (pipelineNeedsImage(pipeline as VideoPipeline | undefined)) {
+    if (typeof b.image !== "string" || b.image === "") {
+      return { error: "`image` is required and must be a non-empty base64 string" };
+    }
+  } else if (b.image !== undefined && typeof b.image !== "string") {
+    return { error: "`image` must be a base64 string" };
   }
   if (b.negativePrompt !== undefined && typeof b.negativePrompt !== "string") {
     return { error: "`negativePrompt` must be a string" };
@@ -253,8 +268,19 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
     const err = modelNameError("diffusionModel", b.diffusionModel);
     if (err) return { error: err };
   }
+  // Sampler overrides (Wan 2.1 i2v distilled models): steps 1-100, cfg 0-30.
+  if (
+    b.steps !== undefined &&
+    (typeof b.steps !== "number" || !Number.isInteger(b.steps) || b.steps < 1 || b.steps > 100)
+  ) {
+    return { error: "`steps` must be an integer in [1, 100]" };
+  }
+  if (b.cfg !== undefined && (typeof b.cfg !== "number" || !Number.isFinite(b.cfg) || b.cfg < 0 || b.cfg > 30)) {
+    return { error: "`cfg` must be a number in [0, 30]" };
+  }
 
-  const params: AnimateParams = { prompt: b.prompt, image: b.image };
+  const params: AnimateParams = { prompt: b.prompt };
+  if (typeof b.image === "string" && b.image !== "") params.image = b.image;
   if (typeof b.negativePrompt === "string") params.negativePrompt = b.negativePrompt;
   if (typeof b.seed === "number") params.seed = b.seed;
   if (typeof b.width === "number") params.width = b.width;
@@ -265,6 +291,9 @@ function parseAnimateBody(raw: string): { params: AnimateParams } | { error: str
   if (typeof b.diffusionModel === "string" && b.diffusionModel.trim() !== "") {
     params.diffusionModel = b.diffusionModel.trim();
   }
+  if (isVideoPipeline(b.pipeline)) params.pipeline = b.pipeline;
+  if (typeof b.steps === "number") params.steps = b.steps;
+  if (typeof b.cfg === "number") params.cfg = b.cfg;
   return { params };
 }
 
@@ -517,6 +546,30 @@ async function handleCheckpoints(res: ServerResponse, config: Config, fetchFn: F
   });
 }
 
+// GET /detect-pipeline?model=<exact ComfyUI name> — best-effort architecture detection (ADR-0023).
+// Reads the model file header from the configured diffusion-model dirs and returns the pipeline that
+// drives it, so the UI can pre-select it. Never throws; `pipeline: null` when it can't tell (dirs
+// unset, file not found under them, or unknown format) and the caller keeps its current choice.
+async function handleDetectPipeline(res: ServerResponse, config: Config, rawUrl: string): Promise<void> {
+  const model = new URL(rawUrl, "http://localhost").searchParams.get("model") ?? "";
+  const err = modelNameError("model", model);
+  if (err) {
+    sendJson(res, 422, { error: err });
+    return;
+  }
+  const dirs = config.comfyui.diffusionModelDirs;
+  if (!dirs || dirs.length === 0) {
+    sendJson(res, 200, { pipeline: null, reason: "auto-detection not configured (set comfyui.diffusionModelDirs)" });
+    return;
+  }
+  const detected = await detectPipeline(model, dirs).catch(() => null);
+  if (!detected) {
+    sendJson(res, 200, { pipeline: null, reason: "could not determine the model's architecture" });
+    return;
+  }
+  sendJson(res, 200, { pipeline: detected.pipeline, channels: detected.channels });
+}
+
 async function handleHealth(
   res: ServerResponse,
   config: Config,
@@ -630,6 +683,14 @@ export function createServer(config: Config, fetchFn: FetchFn = fetch, deps: Ser
             return;
           }
           await handleCheckpoints(res, config, fetchFn);
+          return;
+        }
+        if (method === "GET" && url === "/detect-pipeline") {
+          if (!isAuthorized(req, config)) {
+            sendJson(res, 401, { error: "unauthorized" });
+            return;
+          }
+          await handleDetectPipeline(res, config, req.url ?? "");
           return;
         }
         // /health is intentionally NEVER gated — monitoring must work without the token.

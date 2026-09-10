@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
 import type { Config } from "../src/config.ts";
-import { animateImage, wanModelsMissing } from "../src/engine.ts";
+import { animateImage, formatVideoExecutionError, wanModelsMissing } from "../src/engine.ts";
 import { createServer } from "../src/server.ts";
 import { MockComfy } from "./helpers/mock-comfy.ts";
 
@@ -134,6 +134,133 @@ test("animateImage: flat (unprefixed) installs are still injected verbatim", asy
   const graph = mock.submitted[0]!.graph;
   assert.equal(graph["37"].inputs.unet_name, "wan2.2_ti2v_5B_fp16.safetensors");
   assert.equal(graph["39"].inputs.vae_name, "wan2.2_vae.safetensors");
+});
+
+// ---- Wan 2.1 i2v pipeline (ADR-0022 Phase 1) ---------------------------------------------
+
+test("animateImage: pipeline=wan21-i2v renders the Wan 2.1 i2v graph (WanImageToVideo + clip-vision)", async () => {
+  const mock = new MockComfy({
+    outputFilename: (pid) => `${pid}.mp4`,
+    wanUnets: [],
+    wanGgufUnets: ["sub/video-model-a.gguf"],
+  });
+  const r = await animateImage(
+    URL,
+    { prompt: "come alive", image: B64_STILL, pipeline: "wan21-i2v", steps: 4, cfg: 1 },
+    mock.fetch,
+  );
+  assert.equal(r.ok, true);
+  const g = mock.submitted[0]!.graph;
+  // GGUF model wired through UnetLoaderGGUF; the i2v-specific nodes are present.
+  assert.equal(g["37"].class_type, "UnetLoaderGGUF");
+  assert.equal(g["37"].inputs.unet_name, "sub/video-model-a.gguf");
+  assert.equal(g["55"].class_type, "WanImageToVideo");
+  assert.equal(g["40b"].class_type, "CLIPVisionEncode");
+  assert.equal(g["39"].inputs.vae_name, "wan_2.1_vae.safetensors"); // 16-ch VAE, not the 2.2 one
+  // Distilled-model sampler overrides flow through.
+  assert.equal(g["3"].inputs.steps, 4);
+  assert.equal(g["3"].inputs.cfg, 1);
+  // The uploaded still feeds both the i2v latent builder and the clip-vision encoder.
+  assert.equal(g["52"].inputs.image, mock.uploads[0]);
+});
+
+test("animateImage: pipeline=wan21-i2v with CLIP-vision missing -> clean, actionable error", async () => {
+  const mock = new MockComfy({
+    wanUnets: [],
+    wanGgufUnets: ["sub/video-model-a.gguf"],
+    clipVision: [], // no CLIP-vision installed
+  });
+  const r = (await animateImage(
+    URL,
+    { prompt: "p", image: B64_STILL, pipeline: "wan21-i2v" },
+    mock.fetch,
+  )) as { ok: false; error: string };
+  assert.equal(r.ok, false);
+  assert.match(r.error, /Wan 2\.1 i2v support files not installed/);
+  assert.equal(mock.submitted.length, 0);
+});
+
+// ---- Wan text-to-video pipeline (ADR-0022 Phase 2) ---------------------------------------
+
+test("animateImage: pipeline=wan-t2v generates from the prompt alone (no image upload)", async () => {
+  const mock = new MockComfy({
+    outputFilename: (pid) => `${pid}.mp4`,
+    wanUnets: [],
+    wanGgufUnets: ["sub/video-model-a.gguf"],
+  });
+  const r = await animateImage(
+    URL,
+    { prompt: "a sunset timelapse", pipeline: "wan-t2v", steps: 4, cfg: 1 },
+    mock.fetch,
+  );
+  assert.equal(r.ok, true);
+  const g = mock.submitted[0]!.graph;
+  assert.equal(g["37"].class_type, "UnetLoaderGGUF");
+  assert.equal(g["55"].class_type, "EmptyHunyuanLatentVideo"); // text-to-video latent, not i2v
+  assert.equal(g["39"].inputs.vae_name, "wan_2.1_vae.safetensors");
+  assert.equal(g["3"].inputs.steps, 4);
+  assert.equal(g["3"].inputs.cfg, 1);
+  assert.equal(mock.uploads.length, 0); // no still uploaded for text-to-video
+  assert.equal(g["52"], undefined); // no LoadImage node in the t2v graph
+});
+
+test("POST /animate: pipeline=wan-t2v needs no image -> 200 video/mp4", async () => {
+  const mock = new MockComfy({ outputFilename: (pid) => `${pid}.mp4` });
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/animate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a river at dawn", pipeline: "wan-t2v", steps: 4, cfg: 1 }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "video/mp4");
+    assert.equal(mock.submitted[0]!.graph["55"].class_type, "EmptyHunyuanLatentVideo");
+  } finally {
+    await svc.close();
+  }
+});
+
+test("POST /animate: an image IS still required for an image pipeline (no pipeline given) -> 422", async () => {
+  const mock = new MockComfy();
+  const svc = await startService(mock);
+  try {
+    const res = await fetch(`${svc.base}/animate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "come alive" }),
+    });
+    assert.equal(res.status, 422);
+    assert.match(((await res.json()) as any).error, /image/);
+  } finally {
+    await svc.close();
+  }
+});
+
+// ---- architecture-incompatibility error translation (ADR-0022) ---------------------------
+
+test("formatVideoExecutionError: a tensor-size mismatch reads as an architecture message", () => {
+  const mismatch = {
+    status_str: "error",
+    messages: [["execution_error", {
+      node_id: "3", node_type: "KSampler", exception_type: "RuntimeError",
+      exception_message: "The size of tensor a (48) must match the size of tensor b (16) at non-singleton dimension 1",
+    }]],
+  };
+  const msg = formatVideoExecutionError(mismatch);
+  assert.match(msg, /isn't compatible with the built-in Wan 2.2 TI2V workflow/);
+  assert.match(msg, /Original error:/);
+
+  // An unrelated execution error is passed through unchanged (still surfaced verbatim).
+  const oom = {
+    status_str: "error",
+    messages: [["execution_error", {
+      node_id: "3", node_type: "KSampler", exception_type: "RuntimeError",
+      exception_message: "CUDA out of memory",
+    }]],
+  };
+  assert.doesNotMatch(formatVideoExecutionError(oom), /isn't compatible/);
+  assert.match(formatVideoExecutionError(oom), /CUDA out of memory/);
 });
 
 // ---- live discovery of installed video models (ADR-0021) ---------------------------------

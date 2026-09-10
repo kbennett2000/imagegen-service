@@ -21,6 +21,56 @@ a content-rating query param in `scripts/fetch-missing-checkpoints.sh` (it *excl
 results — removing it would let them through) and a token inside a real Hugging Face download URL in
 `install/models.manifest` (line 91; editing it breaks that download).
 
+**Follow-up finding — multiple video architectures (ADR-0022, Phase 0 on this branch).** ADR-0021's
+"list every diffusion model" over-promised: a user's `diffusion_models/` holds models from several
+incompatible architectures (Wan 2.2 TI2V 5B = 48 latent ch, Wan 2.1 I2V = 36, Wan/2.2 T2V = 16,
+Hunyuan/SkyReels = other), but the service ships ONE workflow (Wan 2.2 TI2V). Selecting a non-48-ch
+model fails inside ComfyUI at the sampler (`tensor a (48) must match tensor b (16)`). Also VRAM-bound:
+on a 12 GB card 14B fp16 models don't fit (GGUF-Q4/fp8 only). **Phase 0 landed here:**
+`formatVideoExecutionError` translates that sampler tensor-mismatch into a plain "model needs a
+workflow the service doesn't have yet" message (test added); UI notes the Wan 2.2 TI2V support
+boundary. **Roadmap (ADR-0022, each phase GPU-verified):** (1) workflow registry + architecture
+detection/routing + Wan 2.1 I2V (GGUF-first, fits 12 GB, unlocks the most models); (2) Wan T2V;
+(3) Hunyuan/SkyReels.
+
+**Phase 1 LANDED (Wan 2.1 I2V), GPU-verified.** New `src/workflows/wan21-i2v.json` +
+`src/wan21-workflow.ts` renderer (16-ch `wan_2.1_vae`, umt5, CLIP-ViT-H vision → `WanImageToVideo`).
+Routing is by an explicit **`pipeline`** field on `/animate` (`wan22-ti2v` default, `wan21-i2v`) —
+robust, no fragile header/GGUF auto-detection (deferred). `AnimateParams` gains `pipeline`, `steps`,
+`cfg` (distilled models need low steps + cfg 1); engine `planAnimation` branches per pipeline, wires
+the diffusion loader by extension (`setDiffusionLoader`) and reconciles the pipeline's infra by role.
+UI: a Pipeline dropdown + Steps/CFG overrides shown only for `wan21-i2v`. Verified on the box by
+submitting the rendered graph to ComfyUI with `ns/lightx2v4stepGgufQ4KMWan21_i2v480P.gguf` (4 steps,
+cfg 1, 640×480×25): produced a valid 143 KB MP4, `node_errors: {}`. Tests: 181 pass (+ wan21 render +
+missing-clip-vision cases), tsc clean.
+
+**Phase 2 LANDED (Wan T2V), GPU-verified.** Text-to-video (no input still): new `src/workflows/
+wan-t2v.json` + `src/wan-t2v-workflow.ts` (`EmptyHunyuanLatentVideo` + umt5 + `wan_2.1_vae`, no
+CLIP-vision). Pipeline id `wan-t2v`; `AnimationPlan` gains `needsImage` (false here) so the engine
+skips the upload and renders from the prompt alone. `AnimateParams.image` is now optional; the server
+requires it only for image pipelines (`pipelineNeedsImage`). UI: the picture block hides and Steps/CFG
+show for `wan-t2v`. Verified with `ns/rapidWAN22T2VGGUF_q4KMRapidBase.gguf` (4 steps, cfg 1) → valid
+MP4, `node_errors: {}`. Tests: 184 pass. **Now runnable on 12 GB: Wan 2.2 TI2V 5B, Wan 2.1 I2V (GGUF),
+Wan T2V (GGUF)** — all three GPU-verified, covering the Wan family (the bulk of the user's fittable
+models). **Deliberately NOT built (checked, blocked, not code-fixable now):** Hunyuan is a distinct
+architecture (4096-dim text encoder, double_blocks) and its support files are NOT installed on this
+box — no Hunyuan VAE, no `llava_llama3`/`clip_l` encoders (only Wan/SDXL are present) — so any Hunyuan
+pipeline would just fail preflight; it is also 13.2 GB fp8, over 12 GB VRAM. VACE/Fun are control
+models needing extra control inputs (pose/video), a different use case. 14B fp16 Wan models exceed
+12 GB. **Pipeline AUTO-DETECTION LANDED (ADR-0023), verified.** `src/model-arch.ts` reads a model's
+`patch_embedding` in_channels from the file header (safetensors `shape[1]`; GGUF dims `[-2]`, city96
+ComfyUI-GGUF) → 48/36/16 → pipeline. New `GET /detect-pipeline?model=<name>` (gated, never-throws)
+returns `{pipeline, channels}` or `{pipeline:null}`; config gains `comfyui.diffusionModelDirs` (the
+local `diffusion_models/` roots — empty ⇒ off, manual selection). UI: picking a model calls the
+endpoint and pre-selects the matching pipeline (visible note, overridable). Verified end-to-end on the
+real files (wan2.2_ti2v_5B→48/ti2v, lightx2v→36/i2v, rapidWAN T2V→16/t2v). `config.json` was updated
+locally to enable it (its two model dirs; gitignored so paths don't leak). Tests: 192 pass (+8 in
+`test/model-arch.test.ts`, real safetensors/GGUF fixtures + endpoint), tsc clean.
+
+**IMPORTANT merge state:** master (c517a8c) only has ADR-0021 discovery + the scrub. ADR-0022
+Phases 0/1/2 AND ADR-0023 are on branch `feat/discover-video-models` (PR #45 already merged at an
+earlier commit) and need a NEW PR to reach master.
+
 ### Prior — Video-model subfolder reconciliation (ADR-0020)
 **Video-model subfolder reconciliation (ADR-0020, branch
 `feat/video-model-subfolder-reconciliation`, merged).** Extends ADR-0019's basename

@@ -11,6 +11,13 @@ import { reconcileCheckpoint, modelBasename, modelInstalled, reconcileModelName 
 import { ensureTrigger, lookupStyleLora, type StyleLora } from "./style-loras.js";
 import { renderWanWorkflow, WAN_TEXT_ENCODER, WAN_VAE } from "./wan-workflow.js";
 import {
+  renderWan21I2vWorkflow,
+  WAN21_TEXT_ENCODER,
+  WAN21_VAE,
+  WAN21_CLIP_VISION,
+} from "./wan21-workflow.js";
+import { renderWanT2vWorkflow, WAN_T2V_TEXT_ENCODER, WAN_T2V_VAE } from "./wan-t2v-workflow.js";
+import {
   getVideoModel,
   DEFAULT_ANIMATE_MODEL,
   type AnimateModel,
@@ -94,7 +101,9 @@ export type GenerateResult =
 // (1280x704, 24fps, 121 frames). Validated by the server before it reaches here.
 export interface AnimateParams {
   prompt: string;
-  image: string; // base64 still to animate (required)
+  // Base64 still to animate. Required for image-to-video pipelines; omitted for text-to-video
+  // (`pipeline: "wan-t2v"`), which generates from the prompt alone (ADR-0022, Phase 2).
+  image?: string;
   negativePrompt?: string;
   seed?: number;
   width?: number;
@@ -108,6 +117,28 @@ export interface AnimateParams {
   // (discovered via /health, may carry a subfolder prefix) — ADR-0021. Omitted => the first installed
   // one. Only consulted on the default (Wan) path; ignored for a legacy `model` id like ltxv.
   diffusionModel?: string;
+  // Which workflow family drives the chosen model (ADR-0022). "wan22-ti2v" (default) is the built-in
+  // 48-channel Wan 2.2 TI2V path; "wan21-i2v" is the Wan 2.1 image-to-video pipeline (16-ch VAE +
+  // CLIP-vision). Different architectures need different graphs; the caller picks the matching one.
+  pipeline?: VideoPipeline;
+  // Sampler overrides for the Wan 2.1 i2v path — distilled models (lightx2v, rapid) need low steps
+  // and cfg 1. Ignored by the Wan 2.2 path (its template is fixed).
+  steps?: number;
+  cfg?: number;
+}
+
+// The workflow families the service can drive (ADR-0022). Add a family = add its template + a branch
+// in planAnimation + an entry here.
+export type VideoPipeline = "wan22-ti2v" | "wan21-i2v" | "wan-t2v";
+export const VIDEO_PIPELINES: readonly VideoPipeline[] = ["wan22-ti2v", "wan21-i2v", "wan-t2v"];
+export function isVideoPipeline(v: unknown): v is VideoPipeline {
+  return typeof v === "string" && (VIDEO_PIPELINES as readonly string[]).includes(v);
+}
+
+// Text-to-video pipelines generate from the prompt alone — no input still. Everything else animates a
+// provided image, so the server requires one there and the engine uploads it.
+export function pipelineNeedsImage(pipeline: VideoPipeline | undefined): boolean {
+  return pipeline !== "wan-t2v";
 }
 
 export type AnimateResult =
@@ -458,6 +489,21 @@ const WAN_INFRA_FILES: readonly VideoModelFile[] = [
   { loaderClass: "VAELoader", inputName: "vae_name", file: WAN_VAE, subdir: "vae" },
 ];
 
+// Wan 2.1 i2v shared infrastructure (ADR-0022, Phase 1): text encoder + 16-ch VAE + CLIP-vision. All
+// content-neutral; the diffusion model is discovered separately.
+const WAN21_INFRA_FILES: readonly VideoModelFile[] = [
+  { loaderClass: "CLIPLoader", inputName: "clip_name", file: WAN21_TEXT_ENCODER, subdir: "text_encoders" },
+  { loaderClass: "VAELoader", inputName: "vae_name", file: WAN21_VAE, subdir: "vae" },
+  { loaderClass: "CLIPVisionLoader", inputName: "clip_name", file: WAN21_CLIP_VISION, subdir: "clip_vision" },
+];
+
+// Wan text-to-video shared infra (ADR-0022, Phase 2): text encoder + 16-ch VAE. No CLIP-vision (no
+// input image).
+const WAN_T2V_INFRA_FILES: readonly VideoModelFile[] = [
+  { loaderClass: "CLIPLoader", inputName: "clip_name", file: WAN_T2V_TEXT_ENCODER, subdir: "text_encoders" },
+  { loaderClass: "VAELoader", inputName: "vae_name", file: WAN_T2V_VAE, subdir: "vae" },
+];
+
 // /health video readiness (ADR-0021): the discovered diffusion models + what (if anything) blocks
 // animation. `missing` lists content-neutral infra files and/or the "diffusion-model" sentinel — never
 // a specific model name. Empty `missing` => ready.
@@ -792,6 +838,24 @@ export function formatComfyExecutionError(status: any): string {
   return `ComfyUI execution error: ${JSON.stringify(status).slice(0, 500)}`;
 }
 
+// Video-path error formatter (ADR-0022). A tensor-size mismatch at the sampler means the chosen model
+// is a different ARCHITECTURE than the built-in Wan 2.2 TI2V workflow drives (e.g. a Wan 2.1 / T2V /
+// Hunyuan model — different latent channel count + VAE + graph). Translate that ComfyUI RuntimeError
+// into a plain, actionable message instead of a raw tensor error, while still surfacing the original.
+export function formatVideoExecutionError(status: any): string {
+  const raw = formatComfyExecutionError(status);
+  if (/size of tensor .* must match the size of tensor .* at non-singleton dimension/i.test(raw)) {
+    return (
+      "This model isn't compatible with the built-in Wan 2.2 TI2V workflow — it looks like a " +
+      "different video architecture (its latent size doesn't match). The service currently drives " +
+      "Wan 2.2 TI2V 5B (48-channel) models; support for other families (Wan 2.1 I2V, T2V, Hunyuan) " +
+      "is planned. Original error: " +
+      raw
+    );
+  }
+  return raw;
+}
+
 // Scan a /history entry's outputs for the first produced file. Wan ends in SaveVideo, whose output
 // key varies by ComfyUI build (images / gifs / videos), so take the first output array whose first
 // element carries a `filename` rather than assuming an `images` array under a fixed node id.
@@ -825,6 +889,9 @@ function contentTypeFor(filename: string): string {
 // build the ComfyUI graph once the still is uploaded. The transport (submit/poll/view) is shared.
 interface AnimationPlan {
   files: readonly VideoModelFile[];
+  // Whether the request must carry an input still (false for text-to-video). When false, the engine
+  // skips the upload and `render` is called with "".
+  needsImage: boolean;
   render: (imageName: string) => VideoGraph;
 }
 
@@ -866,11 +933,90 @@ async function planAnimation(
     }
     return {
       files: spec.files,
+      needsImage: true,
       render: (imageName) => spec.render({ ...toRenderParams(params), imageName }),
     };
   }
 
-  // Default: Wan image-to-video with a diffusion model from ComfyUI's live inventory.
+  // Pick the diffusion model from ComfyUI's live inventory (shared by every dynamic Wan pipeline).
+  const chosen = await chooseDiffusionModel(base, fetchFn, params.diffusionModel);
+  if ("ok" in chosen) return chosen;
+
+  // Wan text-to-video pipeline (ADR-0022 Phase 2): prompt-only, no input image, no CLIP-vision.
+  if (params.pipeline === "wan-t2v") {
+    const infraMissing = await videoModelsMissing(base, fetchFn, WAN_T2V_INFRA_FILES);
+    if (infraMissing.length) {
+      return {
+        ok: false,
+        error: `Wan t2v support files not installed on the ComfyUI host: ${infraMissing.join(", ")} — install the Wan 2.1 VAE and umt5 text encoder, then restart ComfyUI`,
+      };
+    }
+    return {
+      files: WAN_T2V_INFRA_FILES,
+      needsImage: false,
+      render: () => {
+        const graph = renderWanT2vWorkflow({
+          ...toRenderParams(params),
+          steps: params.steps,
+          cfg: params.cfg,
+        }) as VideoGraph;
+        setDiffusionLoader(graph, chosen);
+        return graph;
+      },
+    };
+  }
+
+  // Wan 2.1 image-to-video pipeline (ADR-0022): a different architecture — 16-ch VAE + CLIP-vision.
+  if (params.pipeline === "wan21-i2v") {
+    const infraMissing = await videoModelsMissing(base, fetchFn, WAN21_INFRA_FILES);
+    if (infraMissing.length) {
+      return {
+        ok: false,
+        error: `Wan 2.1 i2v support files not installed on the ComfyUI host: ${infraMissing.join(", ")} — install the Wan 2.1 VAE, umt5 text encoder, and CLIP-vision, then restart ComfyUI`,
+      };
+    }
+    return {
+      files: WAN21_INFRA_FILES, // node 37 set explicitly below; infra nodes reconciled by role
+      needsImage: true,
+      render: (imageName) => {
+        const graph = renderWan21I2vWorkflow({
+          ...toRenderParams(params),
+          steps: params.steps,
+          cfg: params.cfg,
+          imageName,
+        }) as VideoGraph;
+        setDiffusionLoader(graph, chosen);
+        return graph;
+      },
+    };
+  }
+
+  // Default: Wan 2.2 TI2V (48-channel) — the built-in TI2V 5B pipeline.
+  const infraMissing = await videoModelsMissing(base, fetchFn, WAN_INFRA_FILES);
+  if (infraMissing.length) {
+    return {
+      ok: false,
+      error: `Wan text-encoder/VAE not installed on the ComfyUI host: ${infraMissing.join(", ")} — run scripts/fetch-wan22-models.ts, then restart ComfyUI`,
+    };
+  }
+  return {
+    files: WAN_INFRA_FILES,
+    needsImage: true,
+    render: (imageName) => {
+      const graph = renderWanWorkflow({ ...toRenderParams(params), imageName }) as VideoGraph;
+      setDiffusionLoader(graph, chosen);
+      return graph;
+    },
+  };
+}
+
+// Pick the diffusion model to animate with: the requested exact/basename name, else the first
+// installed. A clean { ok:false } (never naming a discovered model beyond echoing the request) if none.
+async function chooseDiffusionModel(
+  base: string,
+  fetchFn: FetchFn,
+  requestedRaw: string | undefined,
+): Promise<DiffusionModel | { ok: false; error: string }> {
   const installed = await listDiffusionModels(base, fetchFn);
   if (installed.length === 0) {
     return {
@@ -880,40 +1026,29 @@ async function planAnimation(
         "Add a .safetensors or .gguf model there and restart ComfyUI.",
     };
   }
-  const requested = params.diffusionModel?.trim();
+  const requested = requestedRaw?.trim();
   const chosen = requested
     ? installed.find((m) => m.name === requested || modelBasename(m.name) === modelBasename(requested))
     : installed[0];
   if (!chosen) {
     return { ok: false, error: `Requested video model is not installed: ${modelBasename(requested!)}` };
   }
-  // The shared Wan infra (text encoder + VAE) must be present; the diffusion model already is (it came
-  // from discovery). A missing infra file is named — those are content-neutral, unlike the model.
-  const infraMissing = await videoModelsMissing(base, fetchFn, WAN_INFRA_FILES);
-  if (infraMissing.length) {
-    return {
-      ok: false,
-      error: `Wan text-encoder/VAE not installed on the ComfyUI host: ${infraMissing.join(", ")} — run scripts/fetch-wan22-models.ts, then restart ComfyUI`,
-    };
+  return chosen;
+}
+
+// Point the workflow's diffusion-loader node (37) at the chosen model, picking the loader class by
+// file format: GGUF weights load through the ComfyUI-GGUF node (unet_name only); .safetensors keep the
+// template's UNETLoader + weight_dtype (ADR-0021).
+function setDiffusionLoader(graph: VideoGraph, chosen: DiffusionModel): void {
+  const loader = graph["37"];
+  if (!loader) return;
+  if (isGguf(chosen.name)) {
+    loader.class_type = "UnetLoaderGGUF";
+    loader.inputs = { unet_name: chosen.name };
+  } else {
+    loader.class_type = "UNETLoader";
+    loader.inputs.unet_name = chosen.name;
   }
-  return {
-    // Node 37 (the diffusion loader) is set explicitly below; only the infra nodes need reconciling.
-    files: WAN_INFRA_FILES,
-    render: (imageName) => {
-      const graph = renderWanWorkflow({ ...toRenderParams(params), imageName }) as VideoGraph;
-      const loader = graph["37"];
-      if (loader) {
-        if (isGguf(chosen.name)) {
-          loader.class_type = "UnetLoaderGGUF"; // GGUF weights load through the ComfyUI-GGUF node,
-          loader.inputs = { unet_name: chosen.name }; // which takes only unet_name (no weight_dtype).
-        } else {
-          loader.class_type = "UNETLoader";
-          loader.inputs.unet_name = chosen.name; // keep the template's weight_dtype
-        }
-      }
-      return graph;
-    },
-  };
 }
 
 // animateImage — turn a still into a short video with Wan 2.2 TI2V 5B. Parallels generateImage: same
@@ -933,14 +1068,17 @@ export async function animateImage(
     const plan = await planAnimation(base, params, fetchFn);
     if ("ok" in plan) return plan; // a { ok:false, error } — nothing installed / not found
 
-    // Upload the still. A failure here is NOT swallowed (like img2img): without the input image there
-    // is nothing to animate, so the whole request fails.
-    let imageName: string;
-    try {
-      imageName = await uploadImage(base, fetchFn, params.image);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: `input image upload failed: ${reason}` };
+    // Upload the still for image-to-video pipelines. A failure here is NOT swallowed (like img2img):
+    // without the input image there is nothing to animate. Text-to-video plans need no image (ADR-0022).
+    let imageName = "";
+    if (plan.needsImage) {
+      if (!params.image) return { ok: false, error: "input image is required for this pipeline" };
+      try {
+        imageName = await uploadImage(base, fetchFn, params.image);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: `input image upload failed: ${reason}` };
+      }
     }
 
     const graph = plan.render(imageName);
@@ -996,7 +1134,7 @@ export async function animateImage(
       const entry = hist[promptId];
       if (!entry) continue;
       if (entry.status?.status_str === "error") {
-        return { ok: false, error: formatComfyExecutionError(entry.status) };
+        return { ok: false, error: formatVideoExecutionError(entry.status) };
       }
       out = findOutputFile(entry);
       if (out) break;

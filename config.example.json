@@ -2,7 +2,8 @@
   "comfyui": {
     "url": "http://localhost:8188",
     "checkpoint": "",
-    "upscaleModel": ""
+    "upscaleModel": "",
+    "diffusionModelDirs": []
   },
   "server": {
     "host": "0.0.0.0",

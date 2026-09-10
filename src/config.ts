@@ -12,7 +12,16 @@ export interface Config {
   // per-request `checkpoint` overrides this (ADR-0004).
   // `upscaleModel` is the default upscale model (as ComfyUI lists it, e.g. "RealESRGAN_x4plus.pth").
   // Empty string => auto-pick the first installed model when a request asks to upscale (ADR-0006).
-  readonly comfyui: { readonly url: string; readonly checkpoint: string; readonly upscaleModel: string };
+  // `diffusionModelDirs` are the local ComfyUI `models/diffusion_models/` roots (one per drive) the
+  // service resolves a model name against to READ its header for pipeline auto-detection (ADR-0023).
+  // Empty => auto-detection off (the caller picks the pipeline). Local-ComfyUI only; harmless if unset.
+  readonly comfyui: {
+    readonly url: string;
+    readonly checkpoint: string;
+    readonly upscaleModel: string;
+    // Optional: absent in a partial test Config; the loaded config always has it (defaults to []).
+    readonly diffusionModelDirs?: readonly string[];
+  };
   readonly server: { readonly host: string; readonly port: number };
   // Optional shared-token auth (ADR-0002). Disabled by default: fully open on the trusted LAN,
   // matching the open-ComfyUI/Chronicle stance. The token gates /generate + /styles for the
@@ -36,7 +45,7 @@ export interface Config {
 // Last-resort defaults (ADR-0001): host 0.0.0.0 is LAN-exposed BY DESIGN.
 // auth OFF by default (ADR-0002): behavior identical to the open Slice-1 service.
 export const CONFIG_DEFAULTS: Config = {
-  comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "" },
+  comfyui: { url: "http://localhost:8188", checkpoint: "", upscaleModel: "", diffusionModelDirs: [] },
   server: { host: "0.0.0.0", port: 8189 },
   auth: { enabled: false, token: "" },
   // /var/lock is world-writable (sticky) so the non-root service user (kb) can create the lockfile;
