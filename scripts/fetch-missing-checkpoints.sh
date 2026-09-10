@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # fetch-missing-checkpoints.sh — run a CivitAI model search and download every returned checkpoint
-# that ISN'T already present under ComfyUI's checkpoints dir OR any extra model root you pass.
-# Idempotent: a full-size copy found anywhere in those trees (subfolders you've organized files into,
-# or a second drive; ADR-0017) is skipped; a top-level partial/interrupted file resumes (curl -C -).
+# that ISN'T already present on EITHER drive: the built-in ComfyUI models dir and the second drive
+# (ADR-0017), plus any extra model root you pass. Both are searched RECURSIVELY, so a copy you've
+# filed into a subfolder (e.g. s/ or ns/) still counts as present and is not re-downloaded.
+# Idempotent: a full-size copy found anywhere in those trees is skipped; a top-level partial/
+# interrupted file resumes (curl -C -).
 # A download that comes back too small (a login/error page, not a model) is rejected and removed.
 #
 # Usage:
@@ -10,9 +12,11 @@
 #
 # Defaults mirror the SDXL-checkpoint search in docs/adding-models.md. Config is flags/env only:
 #   --url         full CivitAI /api/v1/models query URL (URL-encode spaces as %20). Env: CIVITAI_API_URL
-#   --dest        ComfyUI checkpoints dir new files land in. Default ~/comfyui/models/checkpoints. Env: CHECKPOINTS_DIR
-#   --extra-root  another ComfyUI models root to ALSO search (its checkpoints/ subdir) before downloading,
-#                 so files moved to a second drive aren't re-fetched. Repeatable. Env: COMFYUI_EXTRA_MODEL_ROOTS (colon-separated)
+#   --dest        ComfyUI checkpoints dir new files land in. Default: the second drive's
+#                 checkpoints/ (see SECOND_DRIVE_ROOT below). Env: CHECKPOINTS_DIR
+#   --extra-root  another ComfyUI models root to ALSO search (its checkpoints/ subdir) before
+#                 downloading. Both drives are already searched by default; this adds more.
+#                 Repeatable. Env: COMFYUI_EXTRA_MODEL_ROOTS (colon-separated)
 #   --token       CivitAI token (Bearer, civitai.com only). Default: $CIVITAI_TOKEN, else install/secrets.env
 #   --min-mb      reject a download smaller than this many MB (catches HTML/login error pages). Default 1000
 #   --dry-run     print the plan (download vs skip) and exit without downloading
@@ -20,15 +24,20 @@ set -euo pipefail
 
 DEFAULT_URL='https://civitai.com/api/v1/models?types=Checkpoint&baseModels=SDXL%201.0&sort=Most%20Downloaded&nsfw=false&limit=10'
 
+# The two ComfyUI model roots this deployment uses (ADR-0017): the built-in dir and the second drive.
+# Both are searched for an existing copy; new checkpoints download to the second drive by default.
+# Override --dest / CHECKPOINTS_DIR for a different destination.
+BUILTIN_ROOT="$HOME/comfyui/models"
+SECOND_DRIVE_ROOT="/run/media/kb/2TB 02/comfyui-models"
+
 api_url="${CIVITAI_API_URL:-$DEFAULT_URL}"
-dest_dir="${CHECKPOINTS_DIR:-$HOME/comfyui/models/checkpoints}"
+dest_dir="${CHECKPOINTS_DIR:-$SECOND_DRIVE_ROOT/checkpoints}"
 token_override=""
 min_mb="${MIN_MB:-1000}"
 dry_run=0
 
-# Additional ComfyUI models roots to also search before downloading (e.g. a second drive you've
-# moved checkpoints onto; ADR-0017). Colon-separated in the env, repeatable via --extra-root. A
-# full-size copy under <root>/checkpoints counts as present; new files still land in --dest.
+# Extra ComfyUI models roots to also search before downloading, on top of the two defaults above.
+# Colon-separated in the env, repeatable via --extra-root.
 declare -a extra_roots=()
 if [[ -n "${COMFYUI_EXTRA_MODEL_ROOTS:-}" ]]; then
   IFS=':' read -r -a extra_roots <<< "$COMFYUI_EXTRA_MODEL_ROOTS"
@@ -45,7 +54,7 @@ while [[ $# -gt 0 ]]; do
     --url)        api_url="$2"; shift 2 ;;
     --token)      token_override="$2"; shift 2 ;;
     --min-mb)     min_mb="$2"; shift 2 ;;
-    -h|--help)    sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,/^set -/p' "$0" | sed '$d'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -59,13 +68,27 @@ if [[ -z "$token" && -f "$repo_root/install/secrets.env" ]]; then
   token="$(grep -oP '(?<=^CIVITAI_TOKEN=).*' "$repo_root/install/secrets.env" 2>/dev/null || true)"
 fi
 
+# If the destination is on the removable second drive, make sure it's actually mounted — otherwise
+# mkdir/curl would write into an empty mount point on the root filesystem (the ADR-0017 caveat).
+drive_mount="/run/media/kb/2TB 02"
+if [[ "$dest_dir" == "$drive_mount"/* ]] && ! mountpoint -q "$drive_mount"; then
+  echo "The 2TB drive isn't mounted ($drive_mount) — refusing to download to an unmounted path." >&2
+  echo "Mount it (open it in Files, or 'udisksctl mount ...'), or pass --dest to a mounted location." >&2
+  exit 1
+fi
+
 mkdir -p "$dest_dir"
 
-# Directories the "already installed?" check searches: the primary dest, plus each extra root's
-# checkpoints/ subdir. Missing dirs are skipped at search time.
-declare -a search_dirs=("$dest_dir")
-for root in "${extra_roots[@]:-}"; do
-  [[ -n "$root" ]] && search_dirs+=("$root/checkpoints")
+# Directories the "already installed?" check searches (recursively, subfolders included): the dest,
+# plus both default roots' checkpoints/ subdir, plus any extra root — deduped, missing dirs dropped
+# at search time. So a full-size copy present on EITHER drive, in any subfolder, blocks a download.
+declare -a search_dirs=()
+declare -A _seen=()
+_candidates=("$dest_dir" "$BUILTIN_ROOT/checkpoints" "$SECOND_DRIVE_ROOT/checkpoints")
+for root in "${extra_roots[@]:-}"; do [[ -n "$root" ]] && _candidates+=("$root/checkpoints"); done
+for d in "${_candidates[@]}"; do
+  [[ -n "$d" && -z "${_seen[$d]:-}" ]] || continue
+  _seen[$d]=1; search_dirs+=("$d")
 done
 
 echo "Search:  $api_url"
@@ -93,9 +116,9 @@ declare -a plan=()
 
 # Pass 1 — build and print the plan (download vs already-installed).
 # "Already installed" is checked RECURSIVELY across every search dir: a full-size copy of the file
-# found anywhere under dest_dir OR an extra root's checkpoints/ — including subfolders you've
-# organized files into — counts as present and is skipped. New downloads still land flat at the top
-# of dest_dir; organizing stays manual.
+# found anywhere on either drive — including subfolders you've organized files into (s/, ns/) —
+# counts as present and is skipped. New downloads land flat at the top of dest_dir; filing them into
+# a subfolder afterwards stays manual (and won't trigger a re-download next run).
 while IFS=$'\t' read -r name size_mb url; do
   [[ -z "$name" ]] && continue
   found=""
