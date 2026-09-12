@@ -750,6 +750,10 @@ export async function generateImage(
       tier = { ...tier, timeoutMs: tier.timeoutMs + UPSCALE_TIMEOUT_BONUS_MS };
     }
 
+    // Tag the SaveImage prefix with the checkpoint so the on-disk file records its model (ADR-0024).
+    // The server resolved params.checkpoint to a ComfyUI filename; empty => the template default.
+    tagSaveNodesWithModel(graph, params.checkpoint || DEFAULT_CHECKPOINT);
+
     // POST /prompt
     const clientId = `imagegen-${randomSeed().toString(16)}`;
     const res = await fetchFn(`${base}/prompt`, {
@@ -813,10 +817,9 @@ export async function generateImage(
     });
     if (!view.ok) return { ok: false, error: `ComfyUI /view returned ${view.status}` };
     const bytes = Buffer.from(await view.arrayBuffer());
-    // Tag the download name with the checkpoint that produced it (ADR-0024). The server resolved
-    // params.checkpoint to a ComfyUI filename; an empty value means the workflow template's default.
-    const filename = tagFilenameWithModel(image.filename, params.checkpoint || DEFAULT_CHECKPOINT);
-    return { ok: true, bytes, filename };
+    // ComfyUI named the file from the model-tagged SaveImage prefix (ADR-0024); pass it through as the
+    // suggested download name so a saved file matches the on-disk name.
+    return { ok: true, bytes, filename: image.filename };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return { ok: false, error: `ComfyUI request failed: ${reason}` };
@@ -886,17 +889,19 @@ function contentTypeFor(filename: string): string {
   return "application/octet-stream";
 }
 
-// Record which model produced an output in its filename (ADR-0024): "ComfyUI_00042_.png" tagged with
-// "sub/wan2.2_ti2v_5B.safetensors" becomes "ComfyUI_00042_.wan2.2_ti2v_5B.png". The model segment is
-// the model's basename with any subfolder prefix and weight-file extension stripped, and anything
-// filesystem-unsafe replaced, so the download name stays safe. Falls back to the untagged name when
-// the model is unknown. Pure and total — it never throws inside a request handler.
-export function tagFilenameWithModel(filename: string, model: string | undefined): string {
+// Record which model produced an output in its filename (ADR-0024). ComfyUI's SaveImage/SaveVideo
+// nodes name the file `<filename_prefix>_<counter>_.<ext>`, so tagging the PREFIX with the model is
+// what actually writes the model into the on-disk file (e.g. "imagegen" -> "imagegen.dreamshaper_8",
+// producing "imagegen.dreamshaper_8_00042_.png"). Point every save node in the graph at the tagged
+// prefix. Pure and total — a no-op when the model is unknown or there's no save node.
+export function tagSaveNodesWithModel(graph: VideoGraph, model: string | undefined): void {
   const seg = modelFilenameSegment(model);
-  if (!seg) return filename;
-  const dot = filename.lastIndexOf(".");
-  // Insert the segment before the extension; append it when there's no extension to sit before.
-  return dot > 0 ? `${filename.slice(0, dot)}.${seg}${filename.slice(dot)}` : `${filename}.${seg}`;
+  if (!seg) return;
+  for (const node of Object.values(graph)) {
+    if (node.class_type !== "SaveImage" && node.class_type !== "SaveVideo") continue;
+    const current = typeof node.inputs.filename_prefix === "string" ? node.inputs.filename_prefix : "imagegen";
+    node.inputs.filename_prefix = `${current}.${seg}`;
+  }
 }
 
 // The filename-safe model segment: drop a subfolder prefix and the weight-file extension, then map any
@@ -1114,6 +1119,9 @@ export async function animateImage(
 
     const graph = plan.render(imageName);
 
+    // Tag the SaveVideo prefix with the model so the on-disk file records what produced it (ADR-0024).
+    tagSaveNodesWithModel(graph, plan.model);
+
     // Reconcile each model-file input against ComfyUI's live list so a subfoldered install
     // ("sub/foo.safetensors") loads by its exact prefixed name (ADR-0020). The renderers stay pure and
     // emit bare names; the prefix is recovered here, mirroring generateImage's ckpt reconcile. A
@@ -1179,9 +1187,8 @@ export async function animateImage(
     });
     if (!view.ok) return { ok: false, error: `ComfyUI /view returned ${view.status}` };
     const bytes = Buffer.from(await view.arrayBuffer());
-    // Tag the download name with the model that produced it (ADR-0024).
-    const filename = tagFilenameWithModel(out.filename, plan.model);
-    return { ok: true, bytes, contentType: contentTypeFor(out.filename), filename };
+    // ComfyUI named the file from the model-tagged SaveVideo prefix (ADR-0024); pass it through.
+    return { ok: true, bytes, contentType: contentTypeFor(out.filename), filename: out.filename };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return { ok: false, error: `ComfyUI request failed: ${reason}` };
