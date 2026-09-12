@@ -94,7 +94,7 @@ const DENOISE_DEFAULT = 0.65;
 const UPSCALE_TIMEOUT_BONUS_MS = 60_000;
 
 export type GenerateResult =
-  | { ok: true; bytes: Buffer }
+  | { ok: true; bytes: Buffer; filename: string }
   | { ok: false; error: string };
 
 // Image-to-video (ADR-0009). `image` is the base64 still to animate; the rest default per ADR-0008
@@ -813,7 +813,10 @@ export async function generateImage(
     });
     if (!view.ok) return { ok: false, error: `ComfyUI /view returned ${view.status}` };
     const bytes = Buffer.from(await view.arrayBuffer());
-    return { ok: true, bytes };
+    // Tag the download name with the checkpoint that produced it (ADR-0024). The server resolved
+    // params.checkpoint to a ComfyUI filename; an empty value means the workflow template's default.
+    const filename = tagFilenameWithModel(image.filename, params.checkpoint || DEFAULT_CHECKPOINT);
+    return { ok: true, bytes, filename };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return { ok: false, error: `ComfyUI request failed: ${reason}` };
@@ -883,6 +886,27 @@ function contentTypeFor(filename: string): string {
   return "application/octet-stream";
 }
 
+// Record which model produced an output in its filename (ADR-0024): "ComfyUI_00042_.png" tagged with
+// "sub/wan2.2_ti2v_5B.safetensors" becomes "ComfyUI_00042_.wan2.2_ti2v_5B.png". The model segment is
+// the model's basename with any subfolder prefix and weight-file extension stripped, and anything
+// filesystem-unsafe replaced, so the download name stays safe. Falls back to the untagged name when
+// the model is unknown. Pure and total — it never throws inside a request handler.
+export function tagFilenameWithModel(filename: string, model: string | undefined): string {
+  const seg = modelFilenameSegment(model);
+  if (!seg) return filename;
+  const dot = filename.lastIndexOf(".");
+  // Insert the segment before the extension; append it when there's no extension to sit before.
+  return dot > 0 ? `${filename.slice(0, dot)}.${seg}${filename.slice(dot)}` : `${filename}.${seg}`;
+}
+
+// The filename-safe model segment: drop a subfolder prefix and the weight-file extension, then map any
+// remaining unsafe characters to "_" (dots are kept, since model names like "wan2.2" carry them).
+function modelFilenameSegment(model: string | undefined): string {
+  if (!model) return "";
+  const base = (model.split("/").pop() ?? model).replace(/\.(safetensors|gguf|ckpt|pt|pth|bin)$/i, "");
+  return base.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+|[._-]+$/g, "");
+}
+
 // ---- image-to-video entry (ADR-0009) -----------------------------------------------------
 
 // A resolved animation plan: which files must be present (for subfolder reconciliation) and how to
@@ -892,6 +916,9 @@ interface AnimationPlan {
   // Whether the request must carry an input still (false for text-to-video). When false, the engine
   // skips the upload and `render` is called with "".
   needsImage: boolean;
+  // The model driving this plan (a ComfyUI diffusion-model name or a legacy model id), used to tag the
+  // output filename (ADR-0024).
+  model: string;
   render: (imageName: string) => VideoGraph;
 }
 
@@ -934,6 +961,7 @@ async function planAnimation(
     return {
       files: spec.files,
       needsImage: true,
+      model: params.model,
       render: (imageName) => spec.render({ ...toRenderParams(params), imageName }),
     };
   }
@@ -954,6 +982,7 @@ async function planAnimation(
     return {
       files: WAN_T2V_INFRA_FILES,
       needsImage: false,
+      model: chosen.name,
       render: () => {
         const graph = renderWanT2vWorkflow({
           ...toRenderParams(params),
@@ -978,6 +1007,7 @@ async function planAnimation(
     return {
       files: WAN21_INFRA_FILES, // node 37 set explicitly below; infra nodes reconciled by role
       needsImage: true,
+      model: chosen.name,
       render: (imageName) => {
         const graph = renderWan21I2vWorkflow({
           ...toRenderParams(params),
@@ -1002,6 +1032,7 @@ async function planAnimation(
   return {
     files: WAN_INFRA_FILES,
     needsImage: true,
+    model: chosen.name,
     render: (imageName) => {
       const graph = renderWanWorkflow({ ...toRenderParams(params), imageName }) as VideoGraph;
       setDiffusionLoader(graph, chosen);
@@ -1148,7 +1179,9 @@ export async function animateImage(
     });
     if (!view.ok) return { ok: false, error: `ComfyUI /view returned ${view.status}` };
     const bytes = Buffer.from(await view.arrayBuffer());
-    return { ok: true, bytes, contentType: contentTypeFor(out.filename), filename: out.filename };
+    // Tag the download name with the model that produced it (ADR-0024).
+    const filename = tagFilenameWithModel(out.filename, plan.model);
+    return { ok: true, bytes, contentType: contentTypeFor(out.filename), filename };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return { ok: false, error: `ComfyUI request failed: ${reason}` };

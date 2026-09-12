@@ -46,7 +46,8 @@ test("animateImage: happy path renders the Wan graph and returns the video bytes
   const r = result as { ok: true; bytes: Buffer; contentType: string; filename: string };
   assert.deepEqual(r.bytes, mock.bytesFor("pid-1"));
   assert.equal(r.contentType, "video/mp4");
-  assert.match(r.filename, /\.mp4$/);
+  // The download name is tagged with the diffusion model that produced it (ADR-0024).
+  assert.equal(r.filename, "pid-1.wan2.2_ti2v_5B_fp16.mp4");
 
   // The submitted graph is the Wan i2v template with our params injected.
   const graph = mock.submitted[0]!.graph;
@@ -120,6 +121,8 @@ test("animateImage: subfoldered model files load by their exact prefixed name (A
   });
   const result = await animateImage(URL, { prompt: "p", image: B64_STILL }, mock.fetch);
   assert.equal(result.ok, true); // preflight passes by basename, nothing "not installed"
+  // The output filename tag drops the subfolder prefix and the .safetensors extension (ADR-0024).
+  assert.equal((result as { ok: true; filename: string }).filename, "pid-1.wan2.2_ti2v_5B_fp16.mp4");
   // The submitted graph asks ComfyUI for the exact prefixed names it advertises, not the bare ones.
   const graph = mock.submitted[0]!.graph;
   assert.equal(graph["37"].inputs.unet_name, "sub/wan2.2_ti2v_5B_fp16.safetensors");

@@ -1,6 +1,18 @@
 # Handoff
 
 ## Current state
+**Model-tagged output filenames (ADR-0024, branch `feat/model-tagged-filenames`, PR open for
+review).** Outputs are renamed `filename.model.extension` so a folder of experiment outputs records
+which model produced each file. Engine `tagFilenameWithModel` (pure/total) inserts the model as a
+segment before the extension — basename only (subfolder prefix + `.safetensors`/`.gguf`/… stripped),
+unsafe chars → `_`, dots kept (`wan2.2_ti2v_5B`); unknown model = no-op. Images tag with the resolved
+`checkpoint` (or template default `sd_xl_base_1.0`) and `GenerateResult` gained `filename`; videos tag
+with the plan's chosen diffusion model (`AnimationPlan.model`). `/generate` + `/animate` now send
+`Content-Disposition: inline; filename="…"`; the UI reads that name for its download links and the
+image result gained a download link. No model NAMES enter the repo — the tag is computed at runtime;
+tests use neutral placeholders. Tests: 195 pass, tsc clean.
+
+## Previous state
 **Discover video models live; keep model names out of the repo (ADR-0021, branch
 `feat/discover-video-models`, PR open for review).** The video Model dropdown was a hardcoded
 two-entry registry and the repo baked in video-model filenames — so a user-installed model never
