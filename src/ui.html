@@ -422,6 +422,14 @@
       }
     }
 
+    // The download name the server suggests via Content-Disposition — model-tagged (ADR-0024) so a
+    // saved file records which model produced it. Falls back to a generic name if the header is absent.
+    function downloadName(res, fallback) {
+      const cd = res.headers.get("content-disposition") || "";
+      const m = /filename="?([^"]+)"?/.exec(cd);
+      return (m && m[1]) ? m[1] : fallback;
+    }
+
     async function loadHealth() {
       try {
         const res = await fetch("/health");
@@ -936,6 +944,12 @@
         img.src = currentObjectUrl;
         img.alt = "generated image";
         outputEl.appendChild(img);
+        const dl = document.createElement("a");
+        dl.href = currentObjectUrl;
+        dl.download = downloadName(res, "image.png"); // model-tagged (ADR-0024)
+        dl.className = "linkbtn";
+        dl.textContent = "download " + dl.download;
+        outputEl.appendChild(dl);
         lastGeneratedBlob = blob;
         $("useAs").hidden = false; // enable "use as Starting/Reference image"
         metaEl.textContent = "Done in " + elapsed + "s — " + Math.round(blob.size / 1024) + " KB" +
@@ -1117,8 +1131,8 @@
         animOutputEl.appendChild(vid);
         const dl = document.createElement("a");
         dl.href = currentAnimUrl;
-        dl.download = "animated.mp4";
-        dl.textContent = "download mp4";
+        dl.download = downloadName(res, "animated.mp4"); // model-tagged (ADR-0024)
+        dl.textContent = "download " + dl.download;
         dl.className = "linkbtn";
         dl.style.display = "inline-block";
         dl.style.marginTop = ".5rem";

@@ -1,10 +1,35 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatComfyExecutionError, generateImage } from "../src/engine.ts";
+import { formatComfyExecutionError, generateImage, tagFilenameWithModel } from "../src/engine.ts";
 import { MockComfy } from "./helpers/mock-comfy.ts";
 
 const URL = "http://localhost:8188";
+
+// --- model-tagged output filenames (ADR-0024) ---------------------------------------------
+
+test("tagFilenameWithModel inserts the model segment before the extension", () => {
+  assert.equal(tagFilenameWithModel("ComfyUI_00042_.png", "dreamshaper_8.safetensors"), "ComfyUI_00042_.dreamshaper_8.png");
+  // subfolder prefix dropped; weight extension dropped; dots inside the name preserved.
+  assert.equal(tagFilenameWithModel("clip.mp4", "sub/wan2.2_ti2v_5B.safetensors"), "clip.wan2.2_ti2v_5B.mp4");
+  assert.equal(tagFilenameWithModel("clip.mp4", "ns/rapidWAN_q4.gguf"), "clip.rapidWAN_q4.mp4");
+});
+
+test("tagFilenameWithModel: unsafe chars sanitized, no-extension appends, empty model is a no-op", () => {
+  assert.equal(tagFilenameWithModel("out.png", "weird name!*.safetensors"), "out.weird_name.png");
+  assert.equal(tagFilenameWithModel("noext", "model.safetensors"), "noext.model");
+  assert.equal(tagFilenameWithModel("out.png", ""), "out.png");
+  assert.equal(tagFilenameWithModel("out.png", undefined), "out.png");
+});
+
+test("generateImage tags the output filename with the checkpoint", async () => {
+  const mock = new MockComfy();
+  const withOverride = await generateImage(URL, { prompt: "x", checkpoint: "dreamshaper_8.safetensors" }, mock.fetch);
+  assert.equal((withOverride as { ok: true; filename: string }).filename, "pid-1.dreamshaper_8.png");
+  // No checkpoint => the workflow template default (sd_xl_base_1.0).
+  const dflt = await generateImage(URL, { prompt: "x" }, mock.fetch);
+  assert.equal((dflt as { ok: true; filename: string }).filename, "pid-2.sd_xl_base_1.0.png");
+});
 
 test("style -> LoRA injection: node 20 LoraLoader wired in, trigger prepended", async () => {
   const mock = new MockComfy();

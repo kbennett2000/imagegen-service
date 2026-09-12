@@ -69,14 +69,31 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html);
 }
 
-function sendPng(res: ServerResponse, bytes: Buffer): void {
-  res.writeHead(200, { "content-type": "image/png", "content-length": String(bytes.length) });
+function sendPng(res: ServerResponse, bytes: Buffer, filename?: string): void {
+  res.writeHead(200, {
+    "content-type": "image/png",
+    "content-length": String(bytes.length),
+    ...contentDisposition(filename),
+  });
   res.end(bytes);
 }
 
-function sendBytes(res: ServerResponse, bytes: Buffer, contentType: string): void {
-  res.writeHead(200, { "content-type": contentType, "content-length": String(bytes.length) });
+function sendBytes(res: ServerResponse, bytes: Buffer, contentType: string, filename?: string): void {
+  res.writeHead(200, {
+    "content-type": contentType,
+    "content-length": String(bytes.length),
+    ...contentDisposition(filename),
+  });
   res.end(bytes);
+}
+
+// Suggest the download name (model-tagged by the engine, ADR-0024) via Content-Disposition. `inline`
+// keeps the UI's in-page preview while giving browsers and `curl -OJ` the name on save. Strip quotes
+// and control chars so the header can't be broken by a crafted name (names are already sanitized).
+function contentDisposition(filename?: string): Record<string, string> {
+  if (!filename) return {};
+  const safe = filename.replace(/[\r\n"\\]/g, "_");
+  return { "content-disposition": `inline; filename="${safe}"` };
 }
 
 function readBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
@@ -445,7 +462,7 @@ async function handleGenerate(
   // isolation inside the engine is unchanged.
   const result = await lease.run(() => generateImage(config.comfyui.url, parsed.params, fetchFn));
   if (result.ok) {
-    sendPng(res, result.bytes);
+    sendPng(res, result.bytes, result.filename);
   } else {
     // All engine failures are ComfyUI-side (unreachable / timeout / rejected workflow).
     sendJson(res, 503, { error: result.error });
@@ -475,7 +492,7 @@ async function handleAnimate(
   // is sized above ANIMATE_TIMEOUT_MS so it never self-yields mid-video (ADR-0012).
   const result = await lease.run(() => animateImage(config.comfyui.url, parsed.params, fetchFn));
   if (result.ok) {
-    sendBytes(res, result.bytes, result.contentType);
+    sendBytes(res, result.bytes, result.contentType, result.filename);
   } else {
     // All engine failures are ComfyUI-side (unreachable / missing Wan models / timeout / rejected).
     sendJson(res, 503, { error: result.error });
