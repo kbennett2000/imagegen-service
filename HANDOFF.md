@@ -2,15 +2,19 @@
 
 ## Current state
 **Model-tagged output filenames (ADR-0024, branch `feat/model-tagged-filenames`, PR open for
-review).** Outputs are renamed `filename.model.extension` so a folder of experiment outputs records
-which model produced each file. Engine `tagFilenameWithModel` (pure/total) inserts the model as a
-segment before the extension — basename only (subfolder prefix + `.safetensors`/`.gguf`/… stripped),
-unsafe chars → `_`, dots kept (`wan2.2_ti2v_5B`); unknown model = no-op. Images tag with the resolved
-`checkpoint` (or template default `sd_xl_base_1.0`) and `GenerateResult` gained `filename`; videos tag
-with the plan's chosen diffusion model (`AnimationPlan.model`). `/generate` + `/animate` now send
-`Content-Disposition: inline; filename="…"`; the UI reads that name for its download links and the
-image result gained a download link. No model NAMES enter the repo — the tag is computed at runtime;
-tests use neutral placeholders. Tests: 195 pass, tsc clean.
+review).** The on-disk file ComfyUI writes is named `<filename_prefix>_<counter>_.<ext>`; the service
+now tags that prefix with the producing model so the model lands in the actual file (e.g.
+`imagegen_00042_.png` → `imagegen.dreamshaper_8_00042_.png`). Engine `tagSaveNodesWithModel`
+(pure/total) appends `.<model-segment>` to every SaveImage/SaveVideo `filename_prefix` — segment is
+basename only (subfolder prefix + `.safetensors`/`.gguf`/… stripped), unsafe chars → `_`, dots kept
+(`wan2.2_ti2v_5B`); unknown model or no save node = no-op. Images tag with the resolved `checkpoint`
+(or template default `sd_xl_base_1.0`); videos tag with the plan's chosen diffusion model
+(`AnimationPlan.model`). Complementary: `GenerateResult` gained `filename`; `/generate` + `/animate`
+pass ComfyUI's produced name back via `Content-Disposition: inline; filename="…"`, and the UI reads it
+for download links (image result gained a download link). NOTE: an early cut of this branch tagged only
+the HTTP download name — that does NOT rename ComfyUI's on-disk file; the fix is the filename_prefix.
+No model NAMES enter the repo — the tag is computed at runtime; tests use neutral placeholders. Tests:
+195 pass, tsc clean.
 
 ## Previous state
 **Discover video models live; keep model names out of the repo (ADR-0021, branch

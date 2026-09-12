@@ -51,8 +51,9 @@ test("POST /generate -> 200 image/png with the produced bytes", async () => {
     });
     assert.equal(res.status, 200);
     assert.equal(res.headers.get("content-type"), "image/png");
-    // The response suggests a model-tagged download name (ADR-0024).
-    assert.equal(res.headers.get("content-disposition"), 'inline; filename="pid-1.sd_xl_base_1.0.png"');
+    // The response suggests a download name (ComfyUI's filename, which carries the model-tagged
+    // SaveImage prefix in production; the mock echoes the prompt id). ADR-0024.
+    assert.equal(res.headers.get("content-disposition"), 'inline; filename="pid-1.png"');
     const bytes = Buffer.from(await res.arrayBuffer());
     assert.deepEqual(bytes, mock.bytesFor("pid-1"));
   } finally {
